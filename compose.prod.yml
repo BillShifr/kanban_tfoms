@@ -1,0 +1,83 @@
+name: minimal-kanban
+
+services:
+  db:
+    image: docker.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_DB: '${POSTGRES_DB:-kanban}'
+      POSTGRES_USER: '${POSTGRES_USER:-kanban}'
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the production env file}'
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" || exit 1',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+    networks: [kanban]
+  db-tools:
+    image: docker.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    profiles: [ops]
+    environment:
+      DATABASE_URL: '${DATABASE_URL:?Set DATABASE_URL in the production env file}'
+    depends_on: { db: { condition: service_healthy } }
+    networks: [kanban]
+  api:
+    image: localhost/minimal-kanban-api:${IMAGE_TAG:?Set IMAGE_TAG in the production env file}
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      APP_ORIGIN: '${APP_ORIGIN:?Set APP_ORIGIN in the production env file}'
+      ALLOW_INSECURE_HTTP: '${ALLOW_INSECURE_HTTP:-false}'
+      DATABASE_URL: '${DATABASE_URL:?Set DATABASE_URL in the production env file}'
+      HOST: 0.0.0.0
+      INITIAL_ADMIN_EMAIL: '${INITIAL_ADMIN_EMAIL:-}'
+      INITIAL_ADMIN_PASSWORD: '${INITIAL_ADMIN_PASSWORD:-}'
+      NODE_ENV: production
+      SESSION_COOKIE_SECURE: '${SESSION_COOKIE_SECURE:-true}'
+      TRUST_PROXY: 'true'
+      UPLOAD_DIR: /app/data/uploads
+    depends_on: { db: { condition: service_healthy } }
+    volumes:
+      - '${UPLOADS_DIR:?Set UPLOADS_DIR in the production env file}:/app/data/uploads:Z'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then((r)=>process.exit(r.ok ? 0 : 1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=64m']
+    networks: [kanban]
+  web:
+    image: localhost/minimal-kanban-web:${IMAGE_TAG:?Set IMAGE_TAG in the production env file}
+    build: { context: ., dockerfile: apps/web/Dockerfile }
+    ports: ['127.0.0.1:${KANBAN_WEB_PORT:-8080}:8080']
+    depends_on: { api: { condition: service_healthy } }
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    networks: [kanban]
+networks:
+  kanban:
+volumes:
+  postgres-data:

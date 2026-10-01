@@ -1,0 +1,26 @@
+{
+  "name": "minimal-kanban",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @kanban/api & npm run dev -w @kanban/web",
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "lint": "npm run lint --workspaces",
+    "test": "npm run test --workspaces",
+    "test:integration": "npm run test:integration -w @kanban/api",
+    "test:e2e": "playwright test",
+    "db:migrate": "npm run db:migrate -w @kanban/api",
+    "db:migrate:compiled": "npm run db:migrate:compiled -w @kanban/api",
+    "format": "prettier --write . --ignore-unknown",
+    "format:check": "prettier --check . --ignore-unknown",
+    "verify": "npm run format:check && npm run typecheck && npm run lint && npm run test && npm run build",
+    "clean": "node -e \"for (const path of ['apps/api/dist', 'apps/web/dist', 'test-results', 'playwright-report', 'coverage']) require('node:fs').rmSync(path, { recursive: true, force: true })\""
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "prettier": "^3.6.2"
+  }
+}

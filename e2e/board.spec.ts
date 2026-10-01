@@ -1,0 +1,675 @@
+import { expect, test, type Page } from '@playwright/test';
+
+const email = process.env.E2E_EMAIL ?? 'admin@example.com';
+const password = process.env.E2E_PASSWORD ?? 'change-me-now';
+
+type Department = { id: string; name: string };
+
+function uniqueName(prefix: string) {
+  return `${prefix} ${Date.now()} ${Math.random().toString(36).slice(2, 7)}`;
+}
+
+async function signIn(page: Page) {
+  await page.goto('/');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Пароль').fill(password);
+  await page.getByRole('button', { name: 'Войти' }).click();
+  await expect(page.locator('main > header')).toBeVisible();
+}
+
+async function getDepartments(page: Page) {
+  const response = await page.request.get('/api/departments');
+  expect(response.status()).toBe(200);
+  const body = (await response.json()) as { departments: Department[] };
+  expect(body.departments.length).toBeGreaterThan(0);
+  return body.departments;
+}
+
+async function openNavigation(page: Page) {
+  await expect(page.getByTestId('workspace')).toBeVisible();
+  const mobileTrigger = page.getByRole('button', {
+    name: 'Открыть меню досок',
+  });
+  if (await mobileTrigger.isVisible()) {
+    await mobileTrigger.click();
+    const drawer = page
+      .getByTestId('mobile-sidebar')
+      .getByRole('dialog', { name: 'Доски', exact: true });
+    await expect(drawer).toBeVisible();
+    return drawer;
+  }
+  const sidebar = page.getByTestId('desktop-sidebar');
+  await expect(sidebar).toBeVisible();
+  return sidebar;
+}
+
+async function selectBoard(page: Page, name: string) {
+  const navigation = await openNavigation(page);
+  await navigation.getByRole('button', { name, exact: true }).click();
+  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+}
+
+async function createBoardForTest(page: Page) {
+  const name = uniqueName('E2E');
+  const [department] = await getDepartments(page);
+  const response = await page.request.post('/api/boards', {
+    data: { name, departmentId: department!.id },
+  });
+  expect(response.status()).toBe(201);
+  await page.reload();
+  await selectBoard(page, name);
+  return name;
+}
+
+async function chooseOption(page: Page, label: string, option: string) {
+  await page.getByRole('textbox', { name: label, exact: true }).click();
+  const item = page.getByRole('option', { name: option, exact: true });
+  await expect(item).toBeVisible();
+  await item.click();
+}
+
+function backlogColumn(page: Page) {
+  return columnByName(page, 'Бэклог');
+}
+
+function columnByName(page: Page, name: string) {
+  return page
+    .getByRole('article')
+    .filter({ has: page.getByRole('heading', { name, exact: true }) });
+}
+
+function taskCard(page: Page, title: string) {
+  return page
+    .getByTestId('task-card')
+    .filter({ has: page.getByText(title, { exact: true }) });
+}
+
+async function chooseAssignee(page: Page, option: string) {
+  const input = page.getByRole('textbox', {
+    name: 'Исполнитель',
+    exact: true,
+  });
+  await input.fill(option);
+  await page.getByRole('option', { name: option, exact: true }).click();
+}
+
+async function chooseTextAssignee(page: Page, name: string) {
+  const input = page.getByRole('textbox', {
+    name: 'Исполнитель',
+    exact: true,
+  });
+  await input.fill(name);
+  await page
+    .getByRole('option', { name: `Использовать «${name}»`, exact: true })
+    .click();
+}
+
+async function addTask(page: Page, title: string) {
+  const backlog = backlogColumn(page);
+  await backlog.getByRole('button', { name: 'Добавить задачу' }).click();
+  await backlog.getByPlaceholder('Новая задача').fill(title);
+  await backlog.getByRole('button', { name: 'Добавить', exact: true }).click();
+  await expect(backlog.getByText(title, { exact: true })).toBeVisible();
+}
+
+test.describe('core board workflow', () => {
+  test('signs in through the Russian interface', async ({ page }) => {
+    await signIn(page);
+    await expect(page.getByTestId('user-email')).toHaveText(email);
+  });
+
+  test('creates a department and a board in nested navigation', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const departmentName = uniqueName('Отдел E2E');
+    const boardName = uniqueName('Доска E2E');
+    let navigation = await openNavigation(page);
+
+    await navigation
+      .getByRole('button', { name: 'Создать отдел', exact: true })
+      .click();
+    const departmentForm = page.locator('form').filter({
+      has: page.getByLabel('Название нового отдела'),
+    });
+    await departmentForm
+      .getByLabel('Название нового отдела')
+      .fill(departmentName);
+    await departmentForm
+      .getByRole('button', { name: 'Создать отдел', exact: true })
+      .click();
+
+    await expect(
+      navigation.getByRole('button', {
+        name: `Свернуть отдел ${departmentName}`,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await navigation
+      .getByRole('button', { name: 'Создать доску', exact: true })
+      .click();
+    const boardForm = page.locator('form').filter({
+      has: page.getByLabel('Название новой доски'),
+    });
+    await boardForm.getByLabel('Название новой доски').fill(boardName);
+    await chooseOption(page, 'Отдел', departmentName);
+    await boardForm
+      .getByRole('button', { name: 'Создать доску', exact: true })
+      .click();
+
+    await expect(
+      page.getByRole('heading', { name: boardName, exact: true }),
+    ).toBeVisible();
+    navigation = await openNavigation(page);
+    const department = navigation.getByTestId('department-section').filter({
+      has: page.getByRole('button', {
+        name: `Свернуть отдел ${departmentName}`,
+        exact: true,
+      }),
+    });
+    await expect(department).toBeVisible();
+    await expect(
+      department.getByRole('button', { name: boardName, exact: true }),
+    ).toBeVisible();
+  });
+
+  test('persists the collapsed desktop sidebar after reload', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop', 'Desktop-only navigation');
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+    const sidebar = page.getByTestId('desktop-sidebar');
+
+    await sidebar
+      .getByRole('button', { name: 'Свернуть боковую панель' })
+      .click();
+    await expect(
+      sidebar.getByRole('button', { name: 'Развернуть боковую панель' }),
+    ).toBeVisible();
+    await expect(
+      sidebar.getByRole('button', { name: boardName, exact: true }),
+    ).toHaveCount(0);
+
+    await page.reload();
+    await expect(
+      sidebar.getByRole('button', { name: 'Развернуть боковую панель' }),
+    ).toBeVisible();
+    await expect(
+      sidebar.getByRole('button', { name: boardName, exact: true }),
+    ).toHaveCount(0);
+    await sidebar
+      .getByRole('button', { name: 'Развернуть боковую панель' })
+      .click();
+    await expect(
+      sidebar.getByRole('button', { name: boardName, exact: true }),
+    ).toBeVisible();
+  });
+
+  test('opens the mobile drawer, selects a board, and closes it', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'mobile', 'Mobile-only navigation');
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+
+    const drawer = await openNavigation(page);
+    await expect(drawer).toBeVisible();
+    await drawer.getByRole('button', { name: boardName, exact: true }).click();
+    await expect(drawer).toBeHidden();
+    await expect(
+      page.getByRole('heading', { name: boardName, exact: true }),
+    ).toBeVisible();
+  });
+
+  test('keeps responsive overflow inside the board', async ({ page }) => {
+    await signIn(page);
+    await createBoardForTest(page);
+    const shell = page.getByTestId('workspace');
+    const header = page.getByTestId('app-header');
+    const board = page.getByTestId('board-scroll');
+    const firstColumn = page.getByTestId('kanban-column').first();
+
+    await expect(shell).toBeVisible();
+    await expect(board).toBeVisible();
+    await expect(firstColumn).toBeVisible();
+
+    const metrics = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+    }));
+    expect(metrics.documentWidth).toBeLessThanOrEqual(metrics.viewport);
+
+    const headerBox = await header.boundingBox();
+    const columnBox = await firstColumn.boundingBox();
+    expect(headerBox?.height).toBeGreaterThanOrEqual(48);
+    expect(headerBox?.height).toBeLessThanOrEqual(72);
+    expect(columnBox?.width).toBeGreaterThanOrEqual(280);
+    expect(columnBox?.width).toBeLessThanOrEqual(340);
+  });
+
+  test('creates a task inline in the backlog', async ({ page }) => {
+    await signIn(page);
+    await createBoardForTest(page);
+
+    const title = `Проверить задачу ${Date.now()}`;
+    await addTask(page, title);
+    const card = taskCard(page, title);
+    await expect(card.locator('footer')).toHaveCount(0);
+    await expect(backlogColumn(page).getByLabel('Задач: 1')).toBeVisible();
+  });
+
+  test('creates and renames a column directly on the board', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const initialName = `Проверка ${suffix}`;
+    const renamedName = `Приёмка ${suffix}`;
+
+    await page.getByRole('button', { name: 'Добавить колонку' }).click();
+    await page.getByLabel('Название новой колонки').fill(initialName);
+    await page.getByRole('button', { name: 'Создать колонку' }).click();
+    await expect(
+      page.getByRole('heading', { name: initialName, exact: true }),
+    ).toBeVisible();
+
+    await page
+      .getByRole('button', { name: `Меню колонки ${initialName}` })
+      .click();
+    await page.getByRole('menuitem', { name: 'Переименовать' }).click();
+    await page.getByLabel('Новое название колонки').fill(renamedName);
+    await page
+      .getByRole('button', { name: 'Сохранить название колонки' })
+      .click();
+    await expect(
+      page.getByRole('heading', { name: renamedName, exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: initialName, exact: true }),
+    ).toHaveCount(0);
+
+    await page.reload();
+    await selectBoard(page, boardName);
+    await expect(
+      page.getByRole('heading', { name: renamedName, exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: initialName, exact: true }),
+    ).toHaveCount(0);
+
+    await page
+      .getByRole('button', { name: `Меню колонки ${renamedName}` })
+      .click();
+    await page.getByRole('menuitem', { name: 'Архивировать колонку' }).click();
+    await page
+      .getByRole('button', { name: 'Подтвердить архивирование' })
+      .click();
+    await expect(
+      page.getByRole('heading', { name: renamedName, exact: true }),
+    ).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Настроить доску' }).click();
+    await page.getByRole('tab', { name: 'Колонки' }).click();
+    const archivedRow = page.locator('.archived-column-row').filter({
+      has: page.getByText(renamedName, { exact: true }),
+    });
+    await expect(archivedRow).toBeVisible();
+    await archivedRow.getByRole('button', { name: 'Восстановить' }).click();
+    await expect(archivedRow).toHaveCount(0);
+
+    await page.reload();
+    await selectBoard(page, boardName);
+    await expect(
+      page.getByRole('heading', { name: renamedName, exact: true }),
+    ).toBeVisible();
+  });
+
+  test('archives and restores a board from the global archive', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+
+    await page.getByRole('button', { name: 'Настроить доску' }).click();
+    await page.getByRole('button', { name: 'Архивировать доску' }).click();
+    await expect(
+      page.getByRole('button', { name: boardName, exact: true }),
+    ).toHaveCount(0);
+
+    await page.getByRole('button', { name: email }).click();
+    await page.getByRole('menuitem', { name: 'Архив досок' }).click();
+    const archived = page.locator('.archived-column-row').filter({
+      has: page.getByText(boardName, { exact: true }),
+    });
+    await expect(archived).toBeVisible();
+    await archived.getByRole('button', { name: 'Восстановить' }).click();
+    await expect(page.getByRole('heading', { name: boardName })).toBeVisible();
+    const navigation = await openNavigation(page);
+    await expect(
+      navigation.getByRole('button', { name: boardName, exact: true }),
+    ).toBeVisible();
+  });
+
+  test('drags a task between columns and persists the move', async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      testInfo.project.name === 'mobile',
+      'Touch drag is covered by the explicit move control on mobile',
+    );
+
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+    const title = `Задача для drag-and-drop ${Date.now()}`;
+    await addTask(page, title);
+
+    const backlog = backlogColumn(page);
+    const inProgress = columnByName(page, 'В работе');
+    const card = backlog.getByTestId('task-card').filter({
+      has: page.getByText(title, { exact: true }),
+    });
+
+    const handle = card.getByRole('button', {
+        name: `Переместить «${title}»`,
+      }),
+      cardBox = await card.boundingBox(),
+      handleBox = await handle.boundingBox(),
+      targetBox = await inProgress.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(handleBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    const grabX = handleBox!.x + handleBox!.width / 2,
+      grabY = handleBox!.y + handleBox!.height / 2,
+      grabOffsetX = grabX - cardBox!.x,
+      pointerX = targetBox!.x + targetBox!.width - 24,
+      pointerY = targetBox!.y + 80;
+    await page.mouse.move(grabX, grabY);
+    await page.mouse.down();
+    await page.mouse.move(handleBox!.x - 8, handleBox!.y + 8, { steps: 3 });
+    await page.mouse.move(pointerX, pointerY, { steps: 12 });
+
+    const preview = page.getByTestId('task-drag-preview');
+    await expect(preview).toBeVisible();
+    const samples = await preview.evaluate(async (node) => {
+      const result: Array<{ left: number; right: number }> = [];
+      for (let index = 0; index < 10; index += 1) {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+        const rect = node.getBoundingClientRect();
+        result.push({ left: rect.left, right: rect.right });
+      }
+      return result;
+    });
+    const lefts = samples.map(({ left }) => left),
+      expectedLeft = pointerX - grabOffsetX,
+      placeholderBox = await card.boundingBox();
+    expect(Math.max(...lefts) - Math.min(...lefts)).toBeLessThanOrEqual(1.5);
+    for (const rect of samples) {
+      expect(Math.abs(rect.left - expectedLeft)).toBeLessThanOrEqual(4);
+      expect(rect.left).toBeGreaterThanOrEqual(targetBox!.x - 4);
+      expect(rect.right).toBeLessThanOrEqual(
+        targetBox!.x + targetBox!.width + 4,
+      );
+    }
+    expect(Math.abs(placeholderBox!.x - cardBox!.x)).toBeLessThanOrEqual(1);
+    await page.mouse.up();
+
+    await expect(backlog.getByText(title, { exact: true })).toHaveCount(0);
+    await expect(inProgress.getByText(title, { exact: true })).toBeVisible();
+
+    await page.reload();
+    await selectBoard(page, boardName);
+    await expect(
+      columnByName(page, 'В работе').getByText(title, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      backlogColumn(page).getByText(title, { exact: true }),
+    ).toHaveCount(0);
+  });
+
+  async function createTask(page: Page, title: string) {
+    await createBoardForTest(page);
+    await addTask(page, title);
+    await backlogColumn(page)
+      .getByRole('button', { name: title, exact: true })
+      .click();
+  }
+
+  test('opens task details and edits a task', async ({ page }) => {
+    await signIn(page);
+    await createTask(page, 'Тестовая задача');
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.getByLabel('Описание').fill('Уточнённое описание');
+    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
+    await expect(page.getByLabel('Описание')).toHaveValue(
+      'Уточнённое описание',
+    );
+  });
+
+  test('records and shows the task path with actors and assignees', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+    const title = `История задачи ${Date.now()}`;
+    await addTask(page, title);
+    await backlogColumn(page)
+      .getByRole('button', { name: title, exact: true })
+      .click();
+
+    await chooseOption(page, 'Исполнитель', email);
+    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
+    await chooseOption(page, 'Колонка', 'В работе');
+    await expect(columnByName(page, 'В работе').getByText(title)).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await page.reload();
+    await selectBoard(page, boardName);
+    await columnByName(page, 'В работе')
+      .getByTestId('task-card')
+      .filter({ hasText: title })
+      .getByRole('button')
+      .first()
+      .click();
+    await page.getByRole('tab', { name: 'История' }).click();
+
+    const events = page.getByTestId('task-history-event');
+    await expect(events).toHaveCount(3);
+    await expect(page.locator('[data-event-type="created"]')).toContainText(
+      `${email} создал задачу`,
+    );
+    await expect(
+      page.locator('[data-event-type="assignee_changed"]'),
+    ).toContainText(`Не назначен → ${email}`);
+    await expect(
+      page.locator('[data-event-type="column_changed"]'),
+    ).toContainText('Бэклог → В работе');
+    for (const event of await events.all()) {
+      const value = await event.locator('time').getAttribute('datetime');
+      expect(value).toBeTruthy();
+      expect(Number.isNaN(Date.parse(value!))).toBe(false);
+    }
+  });
+
+  test('saves, filters, records, replaces, and clears a free-text assignee', async ({
+    page,
+  }) => {
+    await signIn(page);
+    await createBoardForTest(page);
+    const title = uniqueName('Задача со свободным исполнителем');
+    const externalAssignee = uniqueName('Внешний исполнитель');
+    await addTask(page, title);
+    await taskCard(page, title).getByRole('button').first().click();
+
+    await chooseTextAssignee(page, externalAssignee);
+    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
+    await page.keyboard.press('Escape');
+
+    const card = taskCard(page, title);
+    await expect(
+      card.getByTitle(`${externalAssignee} · имя`, { exact: true }),
+    ).toBeVisible();
+
+    await page.getByRole('button', { name: /^Фильтры/ }).click();
+    await chooseOption(page, 'Исполнитель', externalAssignee);
+    await expect(card).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Фильтры · 1', exact: true }),
+    ).toBeVisible();
+    await page
+      .getByText('Фильтры задач', { exact: true })
+      .locator('..')
+      .getByRole('button', { name: 'Сбросить', exact: true })
+      .click();
+
+    await card.getByRole('button').first().click();
+    await page.getByRole('tab', { name: 'История' }).click();
+    await expect(
+      page
+        .locator('[data-event-type="assignee_changed"]')
+        .filter({ hasText: `Не назначен → ${externalAssignee}` }),
+    ).toBeVisible();
+
+    await page.getByRole('tab', { name: 'Задача', exact: true }).click();
+    await chooseAssignee(page, email);
+    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
+    await page.getByRole('tab', { name: 'История' }).click();
+    await expect(
+      page
+        .locator('[data-event-type="assignee_changed"]')
+        .filter({ hasText: `${externalAssignee} → ${email}` }),
+    ).toBeVisible();
+
+    await page.getByRole('tab', { name: 'Задача', exact: true }).click();
+    await chooseAssignee(page, 'Не назначен');
+    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
+    await page.getByRole('tab', { name: 'История' }).click();
+    await expect(
+      page
+        .locator('[data-event-type="assignee_changed"]')
+        .filter({ hasText: `${email} → Не назначен` }),
+    ).toBeVisible();
+  });
+
+  test('moves a task with the explicit move menu and archives it', async ({
+    page,
+  }) => {
+    await signIn(page);
+    await createTask(page, 'Переносимая задача');
+    await chooseOption(page, 'Колонка', 'В работе');
+    await expect(
+      page
+        .getByRole('article')
+        .filter({ has: page.getByRole('heading', { name: 'В работе' }) })
+        .getByText('Переносимая задача'),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Другие действия' }).click();
+    await page.getByRole('menuitem', { name: 'Архивировать задачу' }).click();
+  });
+
+  test('records server stopwatch time and a manual entry', async ({ page }) => {
+    await signIn(page);
+    await createTask(page, 'Задача со временем');
+    await page.getByRole('button', { name: 'Запустить таймер' }).click();
+    await page.getByRole('button', { name: 'Остановить таймер' }).click();
+    await page.getByLabel('Продолжительность').fill('25');
+    await page.getByRole('button', { name: 'Добавить время' }).click();
+  });
+
+  test('shows and downloads an attached screenshot', async ({ page }) => {
+    await signIn(page);
+    await createTask(page, 'Задача с файлом');
+    await page
+      .getByRole('dialog')
+      .locator('input[type="file"]')
+      .setInputFiles({
+        name: 'screen.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('screen'),
+      });
+    const download = page.waitForEvent('download');
+    await page.getByRole('link', { name: 'screen.txt' }).click();
+    expect((await download).suggestedFilename()).toBe('screen.txt');
+  });
+
+  test('filters the board by author, assignee, topic, label, due state, and archive state', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    await signIn(page);
+    const openFilters = () =>
+      page.getByRole('button', { name: /^Фильтры/ }).click();
+    await openFilters();
+    await chooseOption(page, 'Автор', email);
+    await openFilters();
+    await chooseOption(page, 'Исполнитель', email);
+    await openFilters();
+    await chooseOption(page, 'Тема', 'Общее');
+    await openFilters();
+    await chooseOption(page, 'Метка', 'Важно');
+    await openFilters();
+    await chooseOption(page, 'Срок', 'Просроченные');
+    await openFilters();
+    const archived = page.getByLabel('Показывать архивные задачи');
+    await archived.click();
+    await expect(
+      page.getByRole('button', { name: 'Фильтры · 6' }),
+    ).toBeVisible();
+  });
+
+  test('manages members, columns, topics, and labels in board settings', async ({
+    page,
+  }) => {
+    await signIn(page);
+    await page.getByRole('button', { name: 'Настроить доску' }).click();
+    await page.getByRole('tab', { name: 'Участники' }).click();
+    await page
+      .getByLabel('Email нового участника')
+      .fill(`member-${Date.now()}@example.test`);
+    await page.getByLabel('Временный пароль').fill('member-pass-123');
+    await page.getByRole('button', { name: 'Создать и добавить' }).click();
+    await page.getByRole('tab', { name: 'Колонки' }).click();
+    const columnName = `Проверка ${Date.now()}`;
+    await page.getByLabel('Новая колонка').fill(columnName);
+    await page.getByRole('button', { name: 'Создать колонку' }).click();
+    const columnRow = page.locator('.settings-column-item').filter({
+      has: page.getByLabel(`Название колонки ${columnName}`),
+    });
+    await expect(
+      columnRow.getByRole('button', {
+        name: `Сохранить колонку ${columnName}`,
+      }),
+    ).toBeVisible();
+    await columnRow
+      .getByRole('button', { name: `Архивировать колонку ${columnName}` })
+      .click();
+    const confirmation = columnRow.getByRole('alertdialog');
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole('button', { name: 'Отмена' }).click();
+    await expect(confirmation).toHaveCount(0);
+  });
+
+  test('shows separate topic and label creation flows', async ({ page }) => {
+    await signIn(page);
+    await page.getByRole('button', { name: 'Настроить доску' }).click();
+    await page.getByRole('tab', { name: 'Темы и метки' }).click();
+    await expect(
+      page.getByRole('button', { name: 'Создать тему' }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Создать метку' }),
+    ).toBeVisible();
+  });
+
+  test('opens the compact time view and filters entries', async ({ page }) => {
+    await signIn(page);
+    await page.getByRole('button', { name: 'Учёт времени' }).click();
+    await expect(page.getByRole('dialog')).toContainText('Учёт времени');
+    await page.getByLabel('Дата от').fill('01.01.2026');
+    await page.getByLabel('Дата до').fill('31.12.2026');
+    await chooseOption(page, 'Пользователь', email);
+  });
+});

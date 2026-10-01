@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+playwright-report
+test-results
+coverage
+data
+minimal-kanban-release-*.tar.gz

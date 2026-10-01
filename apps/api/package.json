@@ -1,0 +1,36 @@
+{
+  "name": "@kanban/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run",
+    "test:integration": "node -e \"if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL is required')\" && vitest run test/database.integration.test.ts",
+    "db:migrate": "tsx src/migrate.ts",
+    "db:migrate:compiled": "node dist/migrate.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.0.1",
+    "@fastify/multipart": "^9.4.0",
+    "argon2": "^0.41.1",
+    "drizzle-orm": "^0.45.3",
+    "fastify": "^5.6.0",
+    "pg": "^8.16.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/pg": "^8.15.5",
+    "@typescript-eslint/eslint-plugin": "^8.43.0",
+    "@typescript-eslint/parser": "^8.43.0",
+    "eslint": "^10.11.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}
