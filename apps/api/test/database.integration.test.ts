@@ -40,7 +40,7 @@ database('PostgreSQL invariants', () => {
     );
     await client.query(
       `insert into users(id,email,password_hash,role)
-       values ($1,$2,'hash','admin'),($3,$4,'hash','member')`,
+       values ($1,$2,'hash','admin'),($3,$4,'hash','user')`,
       [userA, `${userA}@example.test`, userB, `${userB}@example.test`],
     );
     await client.query(`insert into departments(id,name) values ($1,$2)`, [
@@ -78,7 +78,27 @@ database('PostgreSQL invariants', () => {
     const result = await client.query<{ count: string }>(
       'select count(*)::text as count from _migrations where checksum is not null',
     );
-    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(9);
+    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(10);
+  });
+
+  it('uses only admin and user account roles and defaults to user', async () => {
+    const roles = await client.query<{ enumlabel: string }>(
+      `select enumlabel
+       from pg_enum
+       join pg_type on pg_type.oid = pg_enum.enumtypid
+       where pg_type.typname = 'user_role'
+       order by enumsortorder`,
+    );
+    expect(roles.rows.map((row) => row.enumlabel)).toEqual(['admin', 'user']);
+
+    const defaultUserId = crypto.randomUUID();
+    const created = await client.query<{ role: string }>(
+      `insert into users(id,email,password_hash)
+       values ($1,$2,'hash')
+       returning role::text`,
+      [defaultUserId, `${defaultUserId}@example.test`],
+    );
+    expect(created.rows[0]?.role).toBe('user');
   });
 
   it('rejects a task whose column belongs to another board', async () => {

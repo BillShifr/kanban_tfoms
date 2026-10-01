@@ -12,7 +12,7 @@ import {
   check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-export const userRole = pgEnum('user_role', ['admin', 'member']);
+export const userRole = pgEnum('user_role', ['admin', 'user']);
 export const boardRole = pgEnum('board_role', ['admin', 'member']);
 export const taskEventType = pgEnum('task_event_type', [
   'created',
@@ -23,7 +23,7 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey(),
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
-  role: userRole('role').notNull().default('member'),
+  role: userRole('role').notNull().default('user'),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

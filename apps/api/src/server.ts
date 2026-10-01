@@ -85,6 +85,21 @@ const credentials = z
     }
     return parsed;
   });
+const accountRole = z.enum(['admin', 'user']);
+const adminUserCreateInput = z
+  .object({
+    email: z.string().trim().email().max(254),
+    password: z.string().min(10).max(256),
+    role: accountRole.default('user'),
+  })
+  .strict();
+const adminUserPatchInput = z
+  .object({
+    password: z.string().min(10).max(256).optional(),
+    role: accountRole.optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0);
 const assigneeName = z
   .string()
   .trim()
@@ -145,12 +160,19 @@ const moveInput = z
     beforeTaskId: z.string().uuid().nullable().optional(),
   })
   .strict();
-type User = { id: string; email: string; role: 'admin' | 'member' };
+type User = { id: string; email: string; role: 'admin' | 'user' };
 const id = (r: FastifyRequest, n: string) =>
   z
     .string()
     .uuid()
     .safeParse((r.params as Record<string, string>)[n]);
+const hashPassword = (password: string) =>
+  argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 19456,
+    timeCost: 2,
+    parallelism: 1,
+  });
 async function seedAdmin() {
   const email = process.env.INITIAL_ADMIN_EMAIL,
     password = process.env.INITIAL_ADMIN_PASSWORD;
@@ -173,46 +195,28 @@ async function seedAdmin() {
   await db.insert(users).values({
     id: crypto.randomUUID(),
     email: normalized,
-    passwordHash: await argon2.hash(password, {
-      type: argon2.argon2id,
-      memoryCost: 19456,
-      timeCost: 2,
-      parallelism: 1,
-    }),
+    passwordHash: await hashPassword(password),
     role: 'admin',
   });
 }
-async function member(boardId: string, userId: string) {
+async function member(
+  boardId: string,
+  userId: string,
+  includeArchivedBoard = false,
+) {
   return Boolean(
     (
       await db
         .select({ id: boards.id })
         .from(boards)
         .innerJoin(boardMembers, eq(boardMembers.boardId, boards.id))
+        .innerJoin(users, eq(users.id, boardMembers.userId))
         .where(
           and(
             eq(boards.id, boardId),
             eq(boardMembers.userId, userId),
-            isNull(boards.archivedAt),
-          ),
-        )
-        .limit(1)
-    )[0],
-  );
-}
-async function boardAdmin(boardId: string, userId: string) {
-  return Boolean(
-    (
-      await db
-        .select({ id: boardMembers.userId })
-        .from(boardMembers)
-        .innerJoin(boards, eq(boards.id, boardMembers.boardId))
-        .where(
-          and(
-            eq(boardMembers.boardId, boardId),
-            eq(boardMembers.userId, userId),
-            eq(boardMembers.role, 'admin'),
-            isNull(boards.archivedAt),
+            isNull(users.archivedAt),
+            includeArchivedBoard ? undefined : isNull(boards.archivedAt),
           ),
         )
         .limit(1)
@@ -223,8 +227,9 @@ async function boardOr404(
   boardId: string,
   userId: string,
   reply: FastifyReply,
+  includeArchivedBoard = false,
 ) {
-  if (await member(boardId, userId)) return true;
+  if (await member(boardId, userId, includeArchivedBoard)) return true;
   reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
   return false;
 }
@@ -505,7 +510,6 @@ export async function buildApp() {
     const u = await user(r, reply),
       p = boardInput.safeParse(r.body);
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     const department = {
       id: crypto.randomUUID(),
@@ -530,7 +534,6 @@ export async function buildApp() {
       d = id(r, 'departmentId'),
       p = boardInput.safeParse(r.body);
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!d.success)
       return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
@@ -554,6 +557,34 @@ export async function buildApp() {
     }
     return reply.code(204).send();
   });
+  app.delete('/departments/:departmentId', async (r, reply) => {
+    const u = await user(r, reply),
+      d = id(r, 'departmentId');
+    if (!u) return;
+    if (!d.success)
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
+    const result = await db.transaction(async (tx) => {
+      const department = await tx.execute(
+        sql`select id from departments where id = ${d.data} for update`,
+      );
+      if (!department.rows[0]) return 'DEPARTMENT_NOT_FOUND';
+      const existingBoard = (
+        await tx
+          .select({ id: boards.id })
+          .from(boards)
+          .where(eq(boards.departmentId, d.data))
+          .limit(1)
+      )[0];
+      if (existingBoard) return 'DEPARTMENT_HAS_BOARDS';
+      await tx.delete(departments).where(eq(departments.id, d.data));
+      return 'OK';
+    });
+    if (result === 'DEPARTMENT_NOT_FOUND')
+      return reply.code(404).send({ code: result });
+    if (result === 'DEPARTMENT_HAS_BOARDS')
+      return reply.code(409).send({ code: result });
+    return reply.code(204).send();
+  });
   app.get('/boards', async (r, reply) => {
     const u = await user(r, reply);
     if (!u) return;
@@ -572,11 +603,7 @@ export async function buildApp() {
         .innerJoin(boardMembers, eq(boardMembers.boardId, boards.id))
         .where(
           includeArchived
-            ? and(
-                eq(boardMembers.userId, u.id),
-                eq(boardMembers.role, 'admin'),
-                isNotNull(boards.archivedAt),
-              )
+            ? and(eq(boardMembers.userId, u.id), isNotNull(boards.archivedAt))
             : and(eq(boardMembers.userId, u.id), isNull(boards.archivedAt)),
         )
         .orderBy(boards.createdAt),
@@ -643,9 +670,10 @@ export async function buildApp() {
     const u = await user(r, reply),
       p = id(r, 'id');
     if (!u) return;
-    if (!p.success || !(await boardOr404(p.data, u.id, reply))) return;
     const includeArchived =
       (r.query as Record<string, string | undefined>).archived === 'true';
+    if (!p.success || !(await boardOr404(p.data, u.id, reply, includeArchived)))
+      return;
     const board = (
       await db
         .select({
@@ -673,6 +701,8 @@ export async function buildApp() {
           id: users.id,
           email: users.email,
           role: boardMembers.role,
+          accountRole: users.role,
+          archivedAt: users.archivedAt,
         })
         .from(boardMembers)
         .innerJoin(users, eq(users.id, boardMembers.userId))
@@ -1213,45 +1243,192 @@ export async function buildApp() {
         .orderBy(timeEntries.startedAt),
     };
   });
-  app.post('/admin/users', async (r, reply) => {
+  app.get('/admin/users', async (r, reply) => {
     const u = await user(r, reply),
-      p = credentials.safeParse(r.body);
+      p = z
+        .object({
+          status: z.enum(['active', 'archived', 'all']).default('active'),
+        })
+        .strict()
+        .safeParse(r.query);
     if (!u) return;
     if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
-    const email = normalizeEmail(p.data.email);
-    if (
-      (
-        await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, email))
-          .limit(1)
-      )[0]
-    )
-      return reply.code(409).send({ code: 'EMAIL_TAKEN' });
+    const statusFilter =
+      p.data.status === 'active'
+        ? isNull(users.archivedAt)
+        : p.data.status === 'archived'
+          ? isNotNull(users.archivedAt)
+          : undefined;
+    return {
+      users: await db
+        .select({
+          id: users.id,
+          email: users.email,
+          role: users.role,
+          createdAt: users.createdAt,
+          archivedAt: users.archivedAt,
+        })
+        .from(users)
+        .where(statusFilter)
+        .orderBy(users.email, users.id),
+    };
+  });
+  app.post('/admin/users', async (r, reply) => {
+    const u = await user(r, reply),
+      p = adminUserCreateInput.safeParse(r.body);
+    if (!u) return;
+    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     const created = {
       id: crypto.randomUUID(),
-      email,
-      passwordHash: await argon2.hash(p.data.password, {
-        type: argon2.argon2id,
-        memoryCost: 19456,
-        timeCost: 2,
-        parallelism: 1,
-      }),
-      role: 'member' as const,
+      email: normalizeEmail(p.data.email),
+      passwordHash: await hashPassword(p.data.password),
+      role: p.data.role,
     };
-    await db.insert(users).values(created);
+    try {
+      await db.insert(users).values(created);
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error &&
+        'code' in error &&
+        error.code === '23505'
+      )
+        return reply.code(409).send({ code: 'EMAIL_TAKEN' });
+      throw error;
+    }
     return reply.code(201).send({
-      user: { id: created.id, email: created.email, role: created.role },
+      user: {
+        id: created.id,
+        email: created.email,
+        role: created.role,
+        archivedAt: null,
+      },
     });
+  });
+  app.patch('/admin/users/:userId', async (r, reply) => {
+    const u = await user(r, reply),
+      targetId = id(r, 'userId'),
+      p = adminUserPatchInput.safeParse(r.body);
+    if (!u) return;
+    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!targetId.success)
+      return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    if (targetId.data === u.id && p.data.role !== undefined)
+      return reply.code(409).send({ code: 'SELF_ROLE_CHANGE' });
+    const passwordHash = p.data.password
+      ? await hashPassword(p.data.password)
+      : undefined;
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-active-admins'))`,
+      );
+      const target = (
+        await tx
+          .select({ role: users.role })
+          .from(users)
+          .where(and(eq(users.id, targetId.data), isNull(users.archivedAt)))
+          .limit(1)
+      )[0];
+      if (!target) return 'USER_NOT_FOUND';
+      if (target.role === 'admin' && p.data.role === 'user') {
+        const activeAdmins = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.role, 'admin'), isNull(users.archivedAt)))
+          .limit(2);
+        if (activeAdmins.length <= 1) return 'LAST_ADMIN';
+      }
+      await tx
+        .update(users)
+        .set({
+          ...(p.data.role === undefined ? {} : { role: p.data.role }),
+          ...(passwordHash === undefined ? {} : { passwordHash }),
+        })
+        .where(eq(users.id, targetId.data));
+      if (passwordHash !== undefined)
+        await tx.delete(sessions).where(eq(sessions.userId, targetId.data));
+      return 'OK';
+    });
+    if (result === 'USER_NOT_FOUND')
+      return reply.code(404).send({ code: result });
+    if (result === 'LAST_ADMIN') return reply.code(409).send({ code: result });
+    return reply.code(204).send();
+  });
+  app.delete('/admin/users/:userId', async (r, reply) => {
+    const u = await user(r, reply),
+      targetId = id(r, 'userId');
+    if (!u) return;
+    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!targetId.success)
+      return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    if (targetId.data === u.id)
+      return reply.code(409).send({ code: 'SELF_ARCHIVE' });
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-active-admins'))`,
+      );
+      const target = (
+        await tx
+          .select({ role: users.role })
+          .from(users)
+          .where(and(eq(users.id, targetId.data), isNull(users.archivedAt)))
+          .limit(1)
+      )[0];
+      if (!target) return 'USER_NOT_FOUND';
+      if (target.role === 'admin') {
+        const activeAdmins = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.role, 'admin'), isNull(users.archivedAt)))
+          .limit(2);
+        if (activeAdmins.length <= 1) return 'LAST_ADMIN';
+      }
+      const now = new Date();
+      await tx
+        .update(timeEntries)
+        .set({ stoppedAt: now })
+        .where(
+          and(
+            eq(timeEntries.userId, targetId.data),
+            isNull(timeEntries.stoppedAt),
+          ),
+        );
+      await tx.delete(sessions).where(eq(sessions.userId, targetId.data));
+      await tx
+        .update(users)
+        .set({ archivedAt: now })
+        .where(eq(users.id, targetId.data));
+      return 'OK';
+    });
+    if (result === 'USER_NOT_FOUND')
+      return reply.code(404).send({ code: result });
+    if (result === 'LAST_ADMIN') return reply.code(409).send({ code: result });
+    return reply.code(204).send();
+  });
+  app.post('/admin/users/:userId/restore', async (r, reply) => {
+    const u = await user(r, reply),
+      targetId = id(r, 'userId');
+    if (!u) return;
+    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!targetId.success)
+      return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    const restored = await db
+      .update(users)
+      .set({ archivedAt: null })
+      .where(and(eq(users.id, targetId.data), isNotNull(users.archivedAt)))
+      .returning({ id: users.id });
+    if (!restored[0]) return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    return reply.code(204).send();
   });
   app.patch('/boards/:boardId', async (r, reply) => {
     const u = await user(r, reply),
       b = id(r, 'boardId'),
       p = boardPatchInput.safeParse(r.body);
     if (!u) return;
-    if (!b.success || !(await boardAdmin(b.data, u.id)))
+    if (!b.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     if (
@@ -1272,7 +1449,7 @@ export async function buildApp() {
     const u = await user(r, reply),
       b = id(r, 'boardId');
     if (!u) return;
-    if (!b.success || !(await boardAdmin(b.data, u.id)))
+    if (!b.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     await db.transaction(async (tx) => {
       const now = new Date();
@@ -1296,25 +1473,41 @@ export async function buildApp() {
     const u = await user(r, reply),
       b = id(r, 'boardId');
     if (!u) return;
-    if (!b.success) return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
-    const allowed = (
-      await db
-        .select({ id: boardMembers.userId })
-        .from(boardMembers)
-        .where(
-          and(
-            eq(boardMembers.boardId, b.data),
-            eq(boardMembers.userId, u.id),
-            eq(boardMembers.role, 'admin'),
-          ),
-        )
-        .limit(1)
-    )[0];
-    if (!allowed) return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
+    if (!b.success || !(await member(b.data, u.id, true)))
+      return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     await db
       .update(boards)
       .set({ archivedAt: null })
       .where(eq(boards.id, b.data));
+    return reply.code(204).send();
+  });
+  app.delete('/boards/:boardId', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId');
+    if (!u) return;
+    if (!b.success || !(await member(b.data, u.id, true)))
+      return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
+    const result = await db.transaction(async (tx) => {
+      const board = await tx.execute(
+        sql`select archived_at from boards where id = ${b.data} for update`,
+      );
+      if (!board.rows[0]) return 'BOARD_NOT_FOUND';
+      if (!board.rows[0].archived_at) return 'BOARD_NOT_ARCHIVED';
+      const existingTask = (
+        await tx
+          .select({ id: tasks.id })
+          .from(tasks)
+          .where(eq(tasks.boardId, b.data))
+          .limit(1)
+      )[0];
+      if (existingTask) return 'BOARD_NOT_EMPTY';
+      await tx.delete(boards).where(eq(boards.id, b.data));
+      return 'OK';
+    });
+    if (result === 'BOARD_NOT_FOUND')
+      return reply.code(404).send({ code: result });
+    if (result === 'BOARD_NOT_ARCHIVED' || result === 'BOARD_NOT_EMPTY')
+      return reply.code(409).send({ code: result });
     return reply.code(204).send();
   });
   app.get('/boards/:boardId/members', async (r, reply) => {
@@ -1324,7 +1517,13 @@ export async function buildApp() {
     if (!b.success || !(await boardOr404(b.data, u.id, reply))) return;
     return {
       members: await db
-        .select({ id: users.id, email: users.email, role: boardMembers.role })
+        .select({
+          id: users.id,
+          email: users.email,
+          role: boardMembers.role,
+          accountRole: users.role,
+          archivedAt: users.archivedAt,
+        })
         .from(boardMembers)
         .innerJoin(users, eq(users.id, boardMembers.userId))
         .where(eq(boardMembers.boardId, b.data)),
@@ -1341,7 +1540,8 @@ export async function buildApp() {
         .strict()
         .safeParse(r.body);
     if (!u) return;
-    if (!b.success || !(await boardAdmin(b.data, u.id)))
+    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!b.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     if (
@@ -1368,7 +1568,8 @@ export async function buildApp() {
       b = id(r, 'boardId'),
       target = id(r, 'userId');
     if (!u) return;
-    if (!b.success || !target.success || !(await boardAdmin(b.data, u.id)))
+    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!b.success || !target.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     const removed = await db.transaction(async (tx) => {
       await tx.execute(
@@ -1376,7 +1577,7 @@ export async function buildApp() {
       );
       const membership = (
         await tx
-          .select({ role: boardMembers.role })
+          .select({ userId: boardMembers.userId })
           .from(boardMembers)
           .where(
             and(
@@ -1387,18 +1588,6 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!membership) return 'NOT_FOUND';
-      if (membership.role === 'admin') {
-        const admins = await tx
-          .select({ id: boardMembers.userId })
-          .from(boardMembers)
-          .where(
-            and(
-              eq(boardMembers.boardId, b.data),
-              eq(boardMembers.role, 'admin'),
-            ),
-          );
-        if (admins.length === 1) return 'LAST_BOARD_ADMIN';
-      }
       const assigned = await tx
         .select({ id: tasks.id })
         .from(tasks)
@@ -1437,8 +1626,6 @@ export async function buildApp() {
         );
       return 'OK';
     });
-    if (removed === 'LAST_BOARD_ADMIN')
-      return reply.code(409).send({ code: 'LAST_BOARD_ADMIN' });
     if (removed === 'NOT_FOUND')
       return reply.code(404).send({ code: 'MEMBER_NOT_FOUND' });
     return reply.code(204).send();
@@ -1448,7 +1635,7 @@ export async function buildApp() {
       b = id(r, 'boardId'),
       p = boardInput.safeParse(r.body);
     if (!u) return;
-    if (!b.success || !(await boardAdmin(b.data, u.id)))
+    if (!b.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     const column = await db.transaction(async (tx) => {
@@ -1478,7 +1665,7 @@ export async function buildApp() {
       c = id(r, 'columnId'),
       p = boardInput.safeParse(r.body);
     if (!u) return;
-    if (!b.success || !c.success || !(await boardAdmin(b.data, u.id)))
+    if (!b.success || !c.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     const result = await db
@@ -1500,7 +1687,7 @@ export async function buildApp() {
       b = id(r, 'boardId'),
       c = id(r, 'columnId');
     if (!u) return;
-    if (!b.success || !c.success || !(await boardAdmin(b.data, u.id)))
+    if (!b.success || !c.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     const result = await db.transaction(async (tx) => {
       await tx.execute(
@@ -1552,7 +1739,7 @@ export async function buildApp() {
     const u = await user(r, reply),
       b = id(r, 'boardId');
     if (!u) return;
-    if (!b.success || !(await boardAdmin(b.data, u.id)))
+    if (!b.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     return {
       columns: await db
@@ -1571,7 +1758,7 @@ export async function buildApp() {
       b = id(r, 'boardId'),
       c = id(r, 'columnId');
     if (!u) return;
-    if (!b.success || !c.success || !(await boardAdmin(b.data, u.id)))
+    if (!b.success || !c.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     const restored = await db.transaction(async (tx) => {
       await tx.execute(
@@ -1624,7 +1811,11 @@ export async function buildApp() {
         })
         .strict()
         .safeParse(r.body);
-    if (!u || !b.success || !(await boardAdmin(b.data, u.id))) return null;
+    if (!u) return null;
+    if (!b.success || !(await member(b.data, u.id))) {
+      reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
+      return null;
+    }
     if (!p.success) {
       reply.code(400).send({ code: 'VALIDATION_ERROR' });
       return null;

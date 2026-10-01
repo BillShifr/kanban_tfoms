@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const email = process.env.E2E_EMAIL ?? 'admin@example.com';
 const password = process.env.E2E_PASSWORD ?? 'change-me-now';
@@ -9,12 +9,22 @@ function uniqueName(prefix: string) {
   return `${prefix} ${Date.now()} ${Math.random().toString(36).slice(2, 7)}`;
 }
 
-async function signIn(page: Page) {
+async function signInAs(page: Page, login: string, secret: string) {
   await page.goto('/');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Пароль').fill(password);
+  await expect(
+    page.getByRole('img', { name: 'Логотип ТФОМС Югры' }),
+  ).toBeVisible();
+  await page.getByLabel('Email').fill(login);
+  await page.getByLabel('Пароль').fill(secret);
   await page.getByRole('button', { name: 'Войти' }).click();
   await expect(page.locator('main > header')).toBeVisible();
+  await expect(
+    page.getByLabel('ТФОМС Югры — Канбан', { exact: true }),
+  ).toBeVisible();
+}
+
+async function signIn(page: Page) {
+  await signInAs(page, email, password);
 }
 
 async function getDepartments(page: Page) {
@@ -112,10 +122,117 @@ async function addTask(page: Page, title: string) {
   await expect(backlog.getByText(title, { exact: true })).toBeVisible();
 }
 
+async function expectReadableText(
+  locator: Locator,
+  pseudoElement: string | null = null,
+) {
+  await expect(locator).toBeVisible();
+  const contrast = await locator.evaluate((element, pseudo) => {
+    const parse = (value: string) => {
+      const channels = value.match(/[\d.]+/g)?.map(Number) ?? [];
+      return {
+        red: channels[0] ?? 0,
+        green: channels[1] ?? 0,
+        blue: channels[2] ?? 0,
+        alpha: channels[3] ?? 1,
+      };
+    };
+    const composite = (
+      foreground: ReturnType<typeof parse>,
+      background: ReturnType<typeof parse>,
+    ) => ({
+      red:
+        foreground.red * foreground.alpha +
+        background.red * (1 - foreground.alpha),
+      green:
+        foreground.green * foreground.alpha +
+        background.green * (1 - foreground.alpha),
+      blue:
+        foreground.blue * foreground.alpha +
+        background.blue * (1 - foreground.alpha),
+      alpha: 1,
+    });
+    const layers: ReturnType<typeof parse>[] = [];
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      layers.unshift(parse(getComputedStyle(node).backgroundColor));
+    }
+    const background = layers.reduce(
+      (result, layer) => composite(layer, result),
+      { red: 255, green: 255, blue: 255, alpha: 1 },
+    );
+    const foreground = composite(
+      parse(getComputedStyle(element, pseudo).color),
+      background,
+    );
+    const luminance = (color: ReturnType<typeof parse>) => {
+      const channel = (value: number) => {
+        const normalized = value / 255;
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      };
+      return (
+        0.2126 * channel(color.red) +
+        0.7152 * channel(color.green) +
+        0.0722 * channel(color.blue)
+      );
+    };
+    const foregroundLuminance = luminance(foreground);
+    const backgroundLuminance = luminance(background);
+    return (
+      (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+      (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+    );
+  }, pseudoElement);
+  expect(contrast).toBeGreaterThanOrEqual(4.5);
+}
+
 test.describe('core board workflow', () => {
   test('signs in through the Russian interface', async ({ page }) => {
     await signIn(page);
     await expect(page.getByTestId('user-email')).toHaveText(email);
+  });
+
+  test('keeps primary light-theme controls and labels readable', async ({
+    page,
+  }) => {
+    await signIn(page);
+    await createBoardForTest(page);
+    await page.getByRole('button', { name: email }).click();
+    await page.getByRole('menuitem', { name: 'Светлое' }).click();
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-mantine-color-scheme',
+      'light',
+    );
+
+    const navigation = await openNavigation(page);
+    await expectReadableText(navigation.locator('.aside-heading h2'));
+    await expectReadableText(
+      navigation.getByRole('button', { name: 'Создать доску', exact: true }),
+    );
+    await expectReadableText(
+      navigation.getByRole('button', { name: 'Создать отдел', exact: true }),
+    );
+    if (
+      await page.getByRole('button', { name: 'Открыть меню досок' }).isVisible()
+    ) {
+      await page.keyboard.press('Escape');
+    }
+    await expectReadableText(page.getByRole('button', { name: email }));
+    await expectReadableText(page.locator('#board-title'));
+    await expectReadableText(
+      page.getByTestId('kanban-column').first().locator('header h2'),
+    );
+    await expectReadableText(
+      page
+        .getByTestId('kanban-column')
+        .first()
+        .locator('.column-header-actions > span'),
+    );
+    await expectReadableText(
+      page.getByPlaceholder('Поиск по задачам'),
+      '::placeholder',
+    );
   });
 
   test('creates a department and a board in nested navigation', async ({
@@ -171,6 +288,32 @@ test.describe('core board workflow', () => {
     await expect(
       department.getByRole('button', { name: boardName, exact: true }),
     ).toBeVisible();
+  });
+
+  test('deletes an empty department with confirmation', async ({ page }) => {
+    await signIn(page);
+    const departmentName = uniqueName('Пустой отдел');
+    const navigation = await openNavigation(page);
+    await navigation
+      .getByRole('button', { name: 'Создать отдел', exact: true })
+      .click();
+    await page.getByLabel('Название нового отдела').fill(departmentName);
+    await page
+      .getByRole('button', { name: 'Создать отдел', exact: true })
+      .last()
+      .click();
+    await navigation
+      .getByRole('button', { name: `Действия отдела ${departmentName}` })
+      .click();
+    await page.getByRole('button', { name: 'Удалить отдел' }).click();
+    const confirmation = page.getByRole('alertdialog');
+    await expect(confirmation).toContainText(departmentName);
+    await confirmation.getByRole('button', { name: 'Удалить' }).click();
+    await expect(
+      navigation.getByRole('button', {
+        name: `Свернуть отдел ${departmentName}`,
+      }),
+    ).toHaveCount(0);
   });
 
   test('persists the collapsed desktop sidebar after reload', async ({
@@ -334,6 +477,13 @@ test.describe('core board workflow', () => {
 
     await page.getByRole('button', { name: 'Настроить доску' }).click();
     await page.getByRole('button', { name: 'Архивировать доску' }).click();
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', {
+        name: 'Архивировать',
+        exact: true,
+      })
+      .click();
     await expect(
       page.getByRole('button', { name: boardName, exact: true }),
     ).toHaveCount(0);
@@ -350,6 +500,158 @@ test.describe('core board workflow', () => {
     await expect(
       navigation.getByRole('button', { name: boardName, exact: true }),
     ).toBeVisible();
+  });
+
+  test('permanently deletes an empty archived board', async ({ page }) => {
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+    await page.getByRole('button', { name: 'Настроить доску' }).click();
+    await page.getByRole('button', { name: 'Архивировать доску' }).click();
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: 'Архивировать', exact: true })
+      .click();
+    await page.getByRole('button', { name: email }).click();
+    await page.getByRole('menuitem', { name: 'Архив досок' }).click();
+    await page
+      .getByRole('button', { name: `Удалить доску ${boardName} навсегда` })
+      .click();
+    const confirmation = page.getByRole('alertdialog');
+    await confirmation.getByLabel(`Введите «${boardName}»`).fill(boardName);
+    await confirmation
+      .getByRole('button', { name: 'Удалить навсегда' })
+      .click();
+    await expect(page.getByText(boardName, { exact: true })).toHaveCount(0);
+  });
+
+  test('administrator manages users, roles, passwords, and account status', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const userEmail = `crud-${Date.now()}@example.test`;
+    const currentResponse = await page.request.get('/api/auth/me');
+    const current = (await currentResponse.json()) as {
+      user: { id: string };
+    };
+    const selfRoleChange = await page.request.patch(
+      `/api/admin/users/${current.user.id}`,
+      { data: { role: 'user' } },
+    );
+    expect(selfRoleChange.status()).toBe(409);
+    expect(await selfRoleChange.json()).toEqual({ code: 'SELF_ROLE_CHANGE' });
+    const selfArchive = await page.request.delete(
+      `/api/admin/users/${current.user.id}`,
+    );
+    expect(selfArchive.status()).toBe(409);
+    expect(await selfArchive.json()).toEqual({ code: 'SELF_ARCHIVE' });
+    await page.getByRole('button', { name: email }).click();
+    await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
+    await page.getByLabel('Email').fill(userEmail);
+    await page.getByLabel('Пароль для входа').fill('initial-pass-123');
+    await page.getByRole('button', { name: 'Создать пользователя' }).click();
+    await expect(page.getByText(userEmail, { exact: true })).toBeVisible();
+
+    await chooseOption(page, `Роль ${userEmail}`, 'Администратор');
+    await expect(
+      page.getByRole('textbox', { name: `Роль ${userEmail}` }),
+    ).toHaveValue('Администратор');
+    await chooseOption(page, `Роль ${userEmail}`, 'Пользователь');
+    await expect(
+      page.getByRole('textbox', { name: `Роль ${userEmail}` }),
+    ).toHaveValue('Пользователь');
+
+    await page
+      .getByRole('button', { name: `Сменить пароль ${userEmail}` })
+      .click();
+    await page
+      .getByLabel(`Новый пароль для ${userEmail}`)
+      .fill('updated-pass-123');
+    await page
+      .getByRole('button', { name: 'Сменить пароль', exact: true })
+      .click();
+    await page.getByRole('button', { name: `Отключить ${userEmail}` }).click();
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: 'Отключить' })
+      .click();
+    await page.getByRole('tab', { name: 'Отключённые' }).click();
+    const archived = page.locator('.admin-user-row').filter({
+      has: page.getByText(userEmail, { exact: true }),
+    });
+    await expect(archived).toBeVisible();
+    await archived.getByRole('button', { name: 'Восстановить' }).click();
+    await expect(archived).toHaveCount(0);
+  });
+
+  test('regular user has domain CRUD but no account administration', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const userEmail = `worker-${Date.now()}@example.test`;
+    const userPassword = 'worker-pass-123';
+    const createdUserResponse = await page.request.post('/api/admin/users', {
+      data: { email: userEmail, password: userPassword, role: 'user' },
+    });
+    expect(createdUserResponse.status()).toBe(201);
+    const createdUser = (await createdUserResponse.json()) as {
+      user: { id: string };
+    };
+    const [department] = await getDepartments(page);
+    const boardName = uniqueName('Доска пользователя');
+    const createdBoardResponse = await page.request.post('/api/boards', {
+      data: { name: boardName, departmentId: department!.id },
+    });
+    expect(createdBoardResponse.status()).toBe(201);
+    const createdBoard = (await createdBoardResponse.json()) as {
+      board: { id: string };
+    };
+    const membership = await page.request.post(
+      `/api/boards/${createdBoard.board.id}/members`,
+      { data: { userId: createdUser.user.id, role: 'member' } },
+    );
+    expect(membership.status()).toBe(201);
+
+    await page.getByRole('button', { name: email }).click();
+    await page.getByRole('menuitem', { name: 'Выйти' }).click();
+    await signInAs(page, userEmail, userPassword);
+    await selectBoard(page, boardName);
+    await expect(
+      page.getByRole('button', { name: 'Настроить доску' }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Добавить колонку' }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: userEmail }).click();
+    await expect(
+      page.getByRole('menuitem', { name: 'Пользователи и права' }),
+    ).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    const forbidden = await page.request.get('/api/admin/users');
+    expect(forbidden.status()).toBe(403);
+
+    const departmentName = uniqueName('Отдел пользователя');
+    const navigation = await openNavigation(page);
+    await navigation
+      .getByRole('button', { name: 'Создать отдел', exact: true })
+      .click();
+    await page.getByLabel('Название нового отдела').fill(departmentName);
+    await page
+      .getByRole('button', { name: 'Создать отдел', exact: true })
+      .last()
+      .click();
+    await navigation
+      .getByRole('button', { name: `Действия отдела ${departmentName}` })
+      .click();
+    await page.getByRole('button', { name: 'Удалить отдел' }).click();
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: 'Удалить' })
+      .click();
+    await expect(
+      navigation.getByRole('button', {
+        name: `Свернуть отдел ${departmentName}`,
+      }),
+    ).toHaveCount(0);
   });
 
   test('drags a task between columns and persists the move', async ({
@@ -624,13 +926,32 @@ test.describe('core board workflow', () => {
     page,
   }) => {
     await signIn(page);
+    const memberEmail = `member-${Date.now()}@example.test`;
+    const created = await page.request.post('/api/admin/users', {
+      data: {
+        email: memberEmail,
+        password: 'member-pass-123',
+        role: 'user',
+      },
+    });
+    expect(created.status()).toBe(201);
     await page.getByRole('button', { name: 'Настроить доску' }).click();
-    await page.getByRole('tab', { name: 'Участники' }).click();
-    await page
-      .getByLabel('Email нового участника')
-      .fill(`member-${Date.now()}@example.test`);
-    await page.getByLabel('Временный пароль').fill('member-pass-123');
-    await page.getByRole('button', { name: 'Создать и добавить' }).click();
+    await page.getByRole('tab', { name: 'Доступ' }).click();
+    const memberSelect = page.getByRole('textbox', {
+      name: 'Добавить пользователя',
+    });
+    await memberSelect.fill(memberEmail);
+    await expect(
+      page.getByRole('option', { name: memberEmail, exact: true }),
+    ).toBeVisible();
+    await memberSelect.press('ArrowDown');
+    await memberSelect.press('Enter');
+    await page.getByRole('button', { name: 'Добавить на доску' }).click();
+    await expect(page.getByText(memberEmail, { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('textbox', { name: 'Добавить пользователя' }),
+    ).toHaveValue('');
+    await expect(page.getByRole('alert')).toHaveCount(0);
     await page.getByRole('tab', { name: 'Колонки' }).click();
     const columnName = `Проверка ${Date.now()}`;
     await page.getByLabel('Новая колонка').fill(columnName);

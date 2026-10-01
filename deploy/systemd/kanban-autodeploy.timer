@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Minimal Kanban main branch for a verified release
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=kanban-autodeploy.service
+
+[Install]
+WantedBy=timers.target
