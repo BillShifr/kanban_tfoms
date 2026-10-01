@@ -4,6 +4,11 @@ import {
   normalizeEmail,
   parseDateInput,
 } from '../src/domain.js';
+import {
+  canChangeAccountRole,
+  canManageAccount,
+  isElevated,
+} from '../src/policy.js';
 
 describe('first-slice domain invariants', () => {
   it('normalizes email consistently', () =>
@@ -19,5 +24,19 @@ describe('first-slice domain invariants', () => {
     expect(parseDateInput('2026-09-30')?.toISOString()).toBe(
       '2026-09-30T23:59:59.000Z',
     );
+  });
+});
+
+describe('role policy', () => {
+  it('keeps global access and account-management boundaries explicit', () => {
+    expect(isElevated('admin')).toBe(true);
+    expect(isElevated('user')).toBe(false);
+    expect(canManageAccount('admin', 'user')).toBe(true);
+    expect(canManageAccount('admin', 'admin')).toBe(false);
+    expect(canManageAccount('admin', 'superadmin')).toBe(false);
+    expect(canManageAccount('superadmin', 'admin')).toBe(true);
+    expect(canManageAccount('superadmin', 'superadmin')).toBe(true);
+    expect(canChangeAccountRole('admin')).toBe(false);
+    expect(canChangeAccountRole('superadmin')).toBe(true);
   });
 });

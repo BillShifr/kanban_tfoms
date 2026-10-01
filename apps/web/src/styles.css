@@ -1111,6 +1111,65 @@ a {
   color: var(--app-muted);
   font-size: 12px;
 }
+.access-editor {
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--app-accent);
+  border-radius: 10px;
+  background: var(--app-surface);
+}
+.access-editor-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.access-editor-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.access-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.access-group {
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+}
+.access-group legend {
+  max-width: 100%;
+  padding: 0 4px;
+  overflow: hidden;
+  color: var(--app-soft);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.access-board-list {
+  padding-left: 8px;
+  display: grid;
+  gap: 6px;
+}
+.access-group .mantine-Checkbox-root {
+  min-width: 0;
+}
+.access-group .mantine-Checkbox-labelWrapper {
+  min-width: 0;
+}
+.access-group .mantine-Checkbox-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .user-action-panel,
 .permanent-delete-panel {
   padding: 12px;
@@ -1265,6 +1324,20 @@ a {
   }
   .admin-user-summary > .mantine-Group-root {
     justify-content: space-between;
+  }
+  .access-groups {
+    grid-template-columns: 1fr;
+  }
+  .access-editor-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .access-editor > .mantine-Group-root {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+  .access-editor > .mantine-Group-root .mantine-Button-root {
+    width: 100%;
   }
   .archived-column-row {
     align-items: flex-start;

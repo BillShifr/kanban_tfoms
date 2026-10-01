@@ -12,7 +12,7 @@ import {
   check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-export const userRole = pgEnum('user_role', ['admin', 'user']);
+export const userRole = pgEnum('user_role', ['superadmin', 'admin', 'user']);
 export const boardRole = pgEnum('board_role', ['admin', 'member']);
 export const taskEventType = pgEnum('task_event_type', [
   'created',
@@ -92,6 +92,24 @@ export const boardMembers = pgTable(
   (t) => [
     primaryKey({ columns: [t.boardId, t.userId] }),
     index('board_members_user_idx').on(t.userId, t.boardId),
+  ],
+);
+export const departmentMembers = pgTable(
+  'department_members',
+  {
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.departmentId, t.userId] }),
+    index('department_members_user_idx').on(t.userId, t.departmentId),
   ],
 );
 export const columns = pgTable(
