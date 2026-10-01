@@ -1,0 +1,11 @@
+[Unit]
+Description=Minimal Kanban automatic deployment
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/apps/minimal-kanban
+Environment=VERIFY_URL=http://127.0.0.1:8080
+ExecStart=%h/apps/minimal-kanban/deploy/auto-deploy.sh
+TimeoutStartSec=1500

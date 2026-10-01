@@ -10,13 +10,14 @@ set +a
 : "${PUBLIC_URL:?PUBLIC_URL is required}"
 PODMAN=${PODMAN:-podman}
 COMPOSE_FILE=${COMPOSE_FILE:-compose.prod.yml}
+VERIFY_URL=${VERIFY_URL:-$PUBLIC_URL}
 
 "$PODMAN" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config >/dev/null
 "$PODMAN" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
-  "$PUBLIC_URL/" >/dev/null
+  "$VERIFY_URL/" >/dev/null
 curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
-  "$PUBLIC_URL/api/health" >/dev/null
+  "$VERIFY_URL/api/health" >/dev/null
 "$PODMAN" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile ops \
   run --rm --no-deps -T db-tools sh -c \
   'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "select count(*) as applied_migrations from _migrations;"' \

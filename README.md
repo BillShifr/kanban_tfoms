@@ -31,7 +31,8 @@ npm run test:e2e
 ```
 
 Production-требования, rootless Podman, собственный PostgreSQL, внутренний
-HTTP, обновление и проверенный backup/restore описаны в `docs/operations.md`.
+HTTP, CI, pull-based автодеплой и проверенный backup/restore описаны в
+`docs/operations.md`.
 
 ## Browser tests
 

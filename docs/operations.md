@@ -137,6 +137,64 @@ PostgreSQL-базы администратор больше не требует�
 
 ## Обновление
 
+### Автоматическое обновление из `main`
+
+Репозиторий публичный, поэтому production-сервер намеренно не регистрируется
+как self-hosted GitHub Runner. CI выполняется на GitHub-hosted runner без
+доступа к внутренней сети. Сервер сам проверяет `origin/main` раз в пять минут
+и не открывает входящие SSH-подключения для GitHub.
+
+Перед установкой таймера убедитесь, что GitHub Actions включены для
+репозитория. Workflow `CI` проверяет форматирование, типы, ESLint, unit- и
+integration-тесты, production build и Playwright на desktop/mobile. Сервер
+обновляется только когда push-run `CI` для точного SHA завершился успешно.
+
+Однократная установка после попадания этих файлов в `main`:
+
+```sh
+cd "$HOME/apps/minimal-kanban"
+git pull --ff-only origin main
+chmod +x deploy/*.sh
+mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/state/minimal-kanban"
+cp deploy/systemd/kanban-autodeploy.service \
+  "$HOME/.config/systemd/user/kanban-autodeploy.service"
+cp deploy/systemd/kanban-autodeploy.timer \
+  "$HOME/.config/systemd/user/kanban-autodeploy.timer"
+systemctl --user daemon-reload
+systemctl --user enable --now kanban-autodeploy.timer
+systemctl --user start kanban-autodeploy.service
+systemctl --user status kanban-autodeploy.timer --no-pager
+journalctl --user -u kanban-autodeploy.service -n 100 --no-pager
+```
+
+Каждое обновление выполняется под `vladislav` и последовательно:
+
+1. Берёт неблокирующий lock и отказывается работать с грязным checkout.
+2. Разрешает только fast-forward ветки `main` из ожидаемого репозитория.
+3. Проверяет успешный GitHub Actions workflow `CI` для точного commit SHA.
+4. Создаёт согласованный backup БД и вложений.
+5. Обновляет код и `IMAGE_TAG`, собирает и запускает контейнеры.
+6. Проверяет web, API healthcheck и таблицу миграций через loopback URL.
+7. При ошибке возвращает предыдущий код и предыдущие образы. Backup остаётся
+   для ручного восстановления данных; автоматический destructive restore БД
+   не выполняется.
+
+Проверить расписание и последний запуск:
+
+```sh
+systemctl --user list-timers kanban-autodeploy.timer --all
+systemctl --user status kanban-autodeploy.service --no-pager
+journalctl --user -u kanban-autodeploy.service -n 100 --no-pager
+```
+
+Остановить автоматические обновления, не останавливая сам Kanban:
+
+```sh
+systemctl --user disable --now kanban-autodeploy.timer
+```
+
+### Ручное обновление релизным архивом
+
 1. Соберите и проверьте новый release archive.
 2. Сделайте backup текущим релизом.
 3. Распакуйте новый архив в отдельный каталог и проверьте `SHA256SUMS`.
