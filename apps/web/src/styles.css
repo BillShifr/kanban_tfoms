@@ -1065,6 +1065,65 @@ a {
   color: var(--app-muted);
   font-size: 12px;
 }
+.admin-user-create {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: var(--app-canvas);
+}
+.admin-user-create .section-heading {
+  grid-column: 1 / -1;
+}
+.admin-user-list {
+  display: grid;
+  gap: 10px;
+}
+.admin-user-row {
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-canvas);
+}
+.admin-user-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.admin-user-summary > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.admin-user-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-user-summary span {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+.user-action-panel,
+.permanent-delete-panel {
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--mantine-color-red-3);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--mantine-color-red-0) 45%, transparent);
+}
+[data-mantine-color-scheme='dark'] .user-action-panel,
+[data-mantine-color-scheme='dark'] .permanent-delete-panel {
+  background: rgb(127 29 29 / 14%);
+}
 
 @media (max-width: 760px) {
   .workspace {
@@ -1196,6 +1255,16 @@ a {
   }
   .settings-create-row {
     grid-template-columns: 1fr;
+  }
+  .admin-user-create {
+    grid-template-columns: 1fr;
+  }
+  .admin-user-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .admin-user-summary > .mantine-Group-root {
+    justify-content: space-between;
   }
   .archived-column-row {
     align-items: flex-start;

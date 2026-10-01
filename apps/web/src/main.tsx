@@ -69,6 +69,7 @@ import {
   Filter,
   GripVertical,
   History as HistoryIcon,
+  KeyRound,
   Menu as MenuIcon,
   LogOut,
   Moon,
@@ -83,14 +84,20 @@ import {
   SunMoon,
   Timer,
   TimerReset,
+  Trash2,
   UserRound,
+  UsersRound,
   X,
 } from 'lucide-react';
 import '@mantine/core/styles.css';
 import '@mantine/dates/styles.css';
 import 'dayjs/locale/ru';
 import './styles.css';
-type User = { id: string; email: string; role?: 'admin' | 'member' };
+type User = { id: string; email: string; role: 'admin' | 'user' };
+type AdminUser = User & {
+  createdAt: string;
+  archivedAt?: string | null;
+};
 type Board = {
   id: string;
   name: string;
@@ -103,6 +110,8 @@ type Person = {
   email: string;
   name?: string;
   role?: 'admin' | 'member';
+  accountRole?: 'admin' | 'user';
+  archivedAt?: string | null;
 };
 type Tag = { id: string; name: string; color?: string };
 type Attachment = {
@@ -192,6 +201,15 @@ const ru: Record<string, string> = {
   EMAIL_TAKEN: 'Пользователь с таким email уже существует',
   ALREADY_MEMBER: 'Пользователь уже добавлен на эту доску',
   USER_NOT_FOUND: 'Пользователь не найден',
+  LAST_ADMIN: 'В системе должен остаться хотя бы один администратор',
+  SELF_ROLE_CHANGE: 'Нельзя изменить собственную роль',
+  SELF_DELETE: 'Нельзя отключить свою учётную запись',
+  SELF_ARCHIVE: 'Нельзя отключить свою учётную запись',
+  DEPARTMENT_HAS_BOARDS:
+    'Сначала перенесите или удалите все доски отдела, включая архивные',
+  BOARD_NOT_ARCHIVED: 'Сначала архивируйте доску',
+  BOARD_NOT_EMPTY:
+    'Доску с задачами нельзя удалить навсегда — оставьте её в архиве',
 };
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const form = init.body instanceof FormData,
@@ -418,10 +436,12 @@ function UserMenu({
   user,
   logout,
   openArchivedBoards,
+  openUsers,
 }: {
   user: User;
   logout: () => void;
   openArchivedBoards: () => void;
+  openUsers: () => void;
 }) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const themes = [
@@ -465,6 +485,18 @@ function UserMenu({
         >
           Архив досок
         </Menu.Item>
+        {user.role === 'admin' && (
+          <>
+            <Menu.Divider />
+            <Menu.Label>Администрирование</Menu.Label>
+            <Menu.Item
+              leftSection={<UsersRound size={16} />}
+              onClick={openUsers}
+            >
+              Пользователи и права
+            </Menu.Item>
+          </>
+        )}
         <Menu.Divider />
         <Menu.Item
           color="red"
@@ -477,16 +509,334 @@ function UserMenu({
     </Menu>
   );
 }
+function AdminUsersDrawer({
+  currentUser,
+  close,
+}: {
+  currentUser: User;
+  close: () => void;
+}) {
+  const [status, setStatus] = useState<'active' | 'archived'>('active'),
+    [email, setEmail] = useState(''),
+    [password, setPassword] = useState(''),
+    [role, setRole] = useState<'admin' | 'user'>('user'),
+    [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null),
+    [newPassword, setNewPassword] = useState(''),
+    [archiveTarget, setArchiveTarget] = useState<AdminUser | null>(null),
+    [busy, setBusy] = useState(''),
+    [error, setError] = useState('');
+  const directory = useQuery<{ users: AdminUser[] }>({
+    queryKey: ['admin-users', status],
+    queryFn: () => api(`/admin/users?status=${status}`),
+  });
+  const run = async (key: string, action: () => Promise<unknown>) => {
+    setBusy(key);
+    setError('');
+    try {
+      await action();
+      await directory.refetch();
+      return true;
+    } catch (reason) {
+      setError(err(reason));
+      return false;
+    } finally {
+      setBusy('');
+    }
+  };
+  return (
+    <MantineDrawer
+      opened
+      onClose={close}
+      position="right"
+      size={720}
+      title={
+        <div>
+          <span className="eyebrow">Администрирование</span>
+          <strong>Пользователи и права</strong>
+        </div>
+      }
+      classNames={{ content: 'task-drawer', body: 'task-drawer-body' }}
+    >
+      <Stack gap="lg">
+        <form
+          className="admin-user-create"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const succeeded = await run('create', () =>
+              api('/admin/users', {
+                method: 'POST',
+                body: JSON.stringify({ email, password, role }),
+              }),
+            );
+            if (succeeded) {
+              setEmail('');
+              setPassword('');
+              setRole('user');
+            }
+          }}
+        >
+          <div className="section-heading">
+            <div>
+              <h2>Новый пользователь</h2>
+              <p>Доступ к доскам выдаётся отдельно</p>
+            </div>
+          </div>
+          <TextInput
+            label="Email"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.currentTarget.value)}
+            required
+          />
+          <PasswordInput
+            label="Пароль для входа"
+            description="Не менее 10 символов"
+            minLength={10}
+            value={password}
+            onChange={(event) => setPassword(event.currentTarget.value)}
+            required
+          />
+          <Select
+            label="Роль"
+            value={role}
+            onChange={(value) => setRole(value as 'admin' | 'user')}
+            data={[
+              { value: 'user', label: 'Пользователь' },
+              { value: 'admin', label: 'Администратор' },
+            ]}
+            allowDeselect={false}
+          />
+          <Button
+            type="submit"
+            leftSection={<Plus size={16} />}
+            loading={busy === 'create'}
+          >
+            Создать пользователя
+          </Button>
+        </form>
+
+        <Tabs
+          value={status}
+          onChange={(value) =>
+            setStatus((value as 'active' | 'archived') ?? 'active')
+          }
+        >
+          <Tabs.List>
+            <Tabs.Tab value="active">Активные</Tabs.Tab>
+            <Tabs.Tab value="archived">Отключённые</Tabs.Tab>
+          </Tabs.List>
+        </Tabs>
+
+        {directory.isLoading && <Text c="dimmed">Загружаем…</Text>}
+        {directory.isError && (
+          <Text c="red" role="alert">
+            Не удалось загрузить пользователей
+          </Text>
+        )}
+        {directory.data?.users.length === 0 && (
+          <div className="empty-state">
+            {status === 'active'
+              ? 'Активных пользователей нет'
+              : 'Отключённых пользователей нет'}
+          </div>
+        )}
+        <div className="admin-user-list">
+          {directory.data?.users.map((item) => {
+            const ownAccount = item.id === currentUser.id;
+            return (
+              <section className="admin-user-row" key={item.id}>
+                <div className="admin-user-summary">
+                  <div>
+                    <strong>{item.email}</strong>
+                    <span>
+                      {item.archivedAt
+                        ? `Отключён ${date(item.archivedAt)}`
+                        : item.role === 'admin'
+                          ? 'Администратор'
+                          : 'Пользователь'}
+                    </span>
+                  </div>
+                  {item.archivedAt ? (
+                    <Button
+                      variant="light"
+                      loading={busy === `restore:${item.id}`}
+                      onClick={() =>
+                        void run(`restore:${item.id}`, () =>
+                          api(`/admin/users/${item.id}/restore`, {
+                            method: 'POST',
+                          }),
+                        )
+                      }
+                    >
+                      Восстановить
+                    </Button>
+                  ) : (
+                    <Group gap="xs" wrap="nowrap">
+                      <Select
+                        aria-label={`Роль ${item.email}`}
+                        value={item.role}
+                        data={[
+                          {
+                            value: 'user',
+                            label: 'Пользователь',
+                          },
+                          {
+                            value: 'admin',
+                            label: 'Администратор',
+                          },
+                        ]}
+                        allowDeselect={false}
+                        disabled={ownAccount || Boolean(busy)}
+                        onChange={(value) =>
+                          value &&
+                          void run(`role:${item.id}`, () =>
+                            api(`/admin/users/${item.id}`, {
+                              method: 'PATCH',
+                              body: JSON.stringify({ role: value }),
+                            }),
+                          )
+                        }
+                      />
+                      <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="lg"
+                        aria-label={`Сменить пароль ${item.email}`}
+                        disabled={ownAccount}
+                        onClick={() => {
+                          setPasswordTarget(item);
+                          setNewPassword('');
+                          setArchiveTarget(null);
+                        }}
+                      >
+                        <KeyRound size={17} />
+                      </ActionIcon>
+                      <ActionIcon
+                        variant="subtle"
+                        color="red"
+                        size="lg"
+                        aria-label={`Отключить ${item.email}`}
+                        disabled={ownAccount}
+                        onClick={() => {
+                          setArchiveTarget(item);
+                          setPasswordTarget(null);
+                        }}
+                      >
+                        <Trash2 size={17} />
+                      </ActionIcon>
+                    </Group>
+                  )}
+                </div>
+                {passwordTarget?.id === item.id && (
+                  <form
+                    className="user-action-panel"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      const succeeded = await run(`password:${item.id}`, () =>
+                        api(`/admin/users/${item.id}`, {
+                          method: 'PATCH',
+                          body: JSON.stringify({ password: newPassword }),
+                        }),
+                      );
+                      if (succeeded) {
+                        setPasswordTarget(null);
+                        setNewPassword('');
+                      }
+                    }}
+                  >
+                    <PasswordInput
+                      label={`Новый пароль для ${item.email}`}
+                      minLength={10}
+                      value={newPassword}
+                      onChange={(event) =>
+                        setNewPassword(event.currentTarget.value)
+                      }
+                      autoFocus
+                      required
+                    />
+                    <Group justify="flex-end">
+                      <Button
+                        type="button"
+                        variant="subtle"
+                        color="gray"
+                        onClick={() => setPasswordTarget(null)}
+                      >
+                        Отмена
+                      </Button>
+                      <Button
+                        type="submit"
+                        loading={busy === `password:${item.id}`}
+                      >
+                        Сменить пароль
+                      </Button>
+                    </Group>
+                  </form>
+                )}
+                {archiveTarget?.id === item.id && (
+                  <div
+                    className="user-action-panel"
+                    role="alertdialog"
+                    aria-labelledby={`archive-user-${item.id}`}
+                  >
+                    <strong id={`archive-user-${item.id}`}>
+                      Отключить {item.email}?
+                    </strong>
+                    <Text size="sm" c="dimmed">
+                      Вход и активные сессии будут закрыты. История работы
+                      сохранится.
+                    </Text>
+                    <Group justify="flex-end">
+                      <Button
+                        variant="subtle"
+                        color="gray"
+                        autoFocus
+                        onClick={() => setArchiveTarget(null)}
+                      >
+                        Отмена
+                      </Button>
+                      <Button
+                        color="red"
+                        loading={busy === `archive:${item.id}`}
+                        onClick={async () => {
+                          const succeeded = await run(
+                            `archive:${item.id}`,
+                            () =>
+                              api(`/admin/users/${item.id}`, {
+                                method: 'DELETE',
+                              }),
+                          );
+                          if (succeeded) setArchiveTarget(null);
+                        }}
+                      >
+                        Отключить
+                      </Button>
+                    </Group>
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+        {error && <p role="alert">{error}</p>}
+      </Stack>
+    </MantineDrawer>
+  );
+}
 function ArchivedBoardsDrawer({
   boards,
   close,
   restore,
+  destroy,
 }: {
   boards: Board[];
   close: () => void;
   restore: (board: Board) => Promise<void>;
+  destroy: (board: Board) => Promise<void>;
 }) {
-  const [error, setError] = useState('');
+  const [error, setError] = useState(''),
+    [deleteTarget, setDeleteTarget] = useState<Board | null>(null),
+    [confirmation, setConfirmation] = useState(''),
+    [busy, setBusy] = useState(false);
   return (
     <MantineDrawer
       opened
@@ -514,17 +864,79 @@ function ArchivedBoardsDrawer({
               <strong>{board.name}</strong>
               <span>Архивирована {date(board.archivedAt)}</span>
             </div>
-            <Button
-              variant="light"
-              onClick={() => {
-                setError('');
-                void restore(board).catch((reason) => setError(err(reason)));
-              }}
-            >
-              Восстановить
-            </Button>
+            <Group gap="xs">
+              <Button
+                variant="light"
+                onClick={() => {
+                  setError('');
+                  void restore(board).catch((reason) => setError(err(reason)));
+                }}
+              >
+                Восстановить
+              </Button>
+              <ActionIcon
+                variant="subtle"
+                color="red"
+                size="lg"
+                aria-label={`Удалить доску ${board.name} навсегда`}
+                onClick={() => {
+                  setDeleteTarget(board);
+                  setConfirmation('');
+                }}
+              >
+                <Trash2 size={17} />
+              </ActionIcon>
+            </Group>
           </div>
         ))}
+        {deleteTarget && (
+          <div
+            className="permanent-delete-panel"
+            role="alertdialog"
+            aria-labelledby="delete-board-title"
+          >
+            <strong id="delete-board-title">
+              Удалить «{deleteTarget.name}» навсегда?
+            </strong>
+            <Text size="sm" c="dimmed">
+              Это действие нельзя отменить. Удалить можно только доску без
+              задач.
+            </Text>
+            <TextInput
+              label={`Введите «${deleteTarget.name}»`}
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.currentTarget.value)}
+              autoFocus
+            />
+            <Group justify="flex-end">
+              <Button
+                variant="subtle"
+                color="gray"
+                onClick={() => setDeleteTarget(null)}
+              >
+                Отмена
+              </Button>
+              <Button
+                color="red"
+                disabled={confirmation !== deleteTarget.name}
+                loading={busy}
+                onClick={() => {
+                  setBusy(true);
+                  setError('');
+                  void destroy(deleteTarget)
+                    .then(() => {
+                      setDeleteTarget(null);
+                      setConfirmation('');
+                    })
+                    .catch((reason) => setError(err(reason)))
+                    .finally(() => setBusy(false));
+                }}
+              >
+                Удалить навсегда
+              </Button>
+            </Group>
+          </div>
+        )}
         {error && <p role="alert">{error}</p>}
       </Stack>
     </MantineDrawer>
@@ -1132,13 +1544,11 @@ function TaskHistory({ boardId, taskId }: { boardId: string; taskId: string }) {
 function TaskDrawer({
   data,
   task,
-  user,
   close,
   refresh,
 }: {
   data: Payload;
   task: Task;
-  user: User;
   close: () => void;
   refresh: () => Promise<unknown>;
 }) {
@@ -1160,9 +1570,7 @@ function TaskDrawer({
     [labelColor, setLabelColor] = useState('#2563eb'),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
-  const canManage = data.members?.some(
-    (member) => member.id === user.id && member.role === 'admin',
-  );
+  const canManage = true;
   const act = async (f: () => Promise<unknown>) => {
     setBusy(true);
     setError('');
@@ -1683,6 +2091,7 @@ function TimeView({ data, close }: { data: Payload; close: () => void }) {
 }
 function Settings({
   data,
+  currentUser,
   departments,
   close,
   refresh,
@@ -1690,6 +2099,7 @@ function Settings({
   archiveBoard,
 }: {
   data: Payload;
+  currentUser: User;
   departments: Department[];
   close: () => void;
   refresh: () => Promise<unknown>;
@@ -1700,12 +2110,16 @@ function Settings({
       queryKey: ['archived-columns', data.board.id],
       queryFn: () => api(`/boards/${data.board.id}/columns/archived`),
     }),
+    directory = useQuery<{ users: AdminUser[] }>({
+      queryKey: ['admin-users', 'active'],
+      queryFn: () => api('/admin/users?status=active'),
+      enabled: currentUser.role === 'admin',
+    }),
     [boardName, setBoardName] = useState(data.board.name),
     [boardDepartment, setBoardDepartment] = useState(
       data.board.departmentId ?? '',
     ),
-    [email, setEmail] = useState(''),
-    [password, setPassword] = useState(''),
+    [memberUserId, setMemberUserId] = useState(''),
     [columnName, setColumnName] = useState(''),
     [topicName, setTopicName] = useState(''),
     [topicColor, setTopicColor] = useState('#64748b'),
@@ -1714,6 +2128,7 @@ function Settings({
     [pendingColumnArchive, setPendingColumnArchive] = useState<string | null>(
       null,
     ),
+    [pendingBoardArchive, setPendingBoardArchive] = useState(false),
     [error, setError] = useState('');
   const returnToSettingsArchive = (columnId: string) =>
     window.requestAnimationFrame(() =>
@@ -1749,7 +2164,7 @@ function Settings({
           <Tabs.Tab value="general">Общие</Tabs.Tab>
           <Tabs.Tab value="columns">Колонки</Tabs.Tab>
           <Tabs.Tab value="taxonomy">Темы и метки</Tabs.Tab>
-          <Tabs.Tab value="members">Участники</Tabs.Tab>
+          <Tabs.Tab value="members">Доступ</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="general" pt="lg">
@@ -1808,16 +2223,48 @@ function Settings({
                 <h3>Архивировать доску</h3>
                 <p>Доска исчезнет из рабочего списка, но данные сохранятся.</p>
               </div>
-              <Button
-                color="red"
-                variant="light"
-                leftSection={<Archive size={16} />}
-                onClick={() =>
-                  void archiveBoard().catch((reason) => setError(err(reason)))
-                }
-              >
-                Архивировать доску
-              </Button>
+              {!pendingBoardArchive ? (
+                <Button
+                  color="red"
+                  variant="light"
+                  leftSection={<Archive size={16} />}
+                  onClick={() => setPendingBoardArchive(true)}
+                >
+                  Архивировать доску
+                </Button>
+              ) : (
+                <div
+                  className="settings-column-confirm"
+                  role="alertdialog"
+                  aria-labelledby="archive-board-title"
+                >
+                  <strong id="archive-board-title">
+                    Архивировать «{data.board.name}»?
+                  </strong>
+                  <Group gap="xs">
+                    <Button
+                      autoFocus
+                      size="compact-sm"
+                      variant="subtle"
+                      color="gray"
+                      onClick={() => setPendingBoardArchive(false)}
+                    >
+                      Отмена
+                    </Button>
+                    <Button
+                      size="compact-sm"
+                      color="red"
+                      onClick={() =>
+                        void archiveBoard().catch((reason) =>
+                          setError(err(reason)),
+                        )
+                      }
+                    >
+                      Архивировать
+                    </Button>
+                  </Group>
+                </div>
+              )}
             </section>
           </Stack>
         </Tabs.Panel>
@@ -1898,7 +2345,6 @@ function Settings({
                       </strong>
                       <Group gap="xs">
                         <Button
-                          autoFocus
                           size="compact-sm"
                           color="red"
                           variant="light"
@@ -1916,6 +2362,7 @@ function Settings({
                           Архивировать
                         </Button>
                         <Button
+                          autoFocus
                           size="compact-sm"
                           variant="subtle"
                           color="gray"
@@ -2115,8 +2562,8 @@ function Settings({
           <Stack gap="md">
             <div className="section-heading">
               <div>
-                <h2>Участники</h2>
-                <p>Доступ к задачам этой доски</p>
+                <h2>Доступ к доске</h2>
+                <p>Участники видят задачи и могут работать с доской</p>
               </div>
             </div>
             {(data.members ?? []).map((member) => (
@@ -2124,66 +2571,82 @@ function Settings({
                 <div>
                   <strong>{member.name ?? member.email}</strong>
                   <span>
-                    {member.role === 'admin' ? 'Администратор' : 'Участник'}
+                    {member.accountRole === 'admin'
+                      ? 'Администратор'
+                      : 'Пользователь'}
+                    {member.archivedAt ? ' · отключён' : ''}
                   </span>
                 </div>
-                {member.role !== 'admin' && (
-                  <Button
-                    variant="subtle"
-                    color="red"
-                    onClick={() =>
-                      void run(() =>
-                        api(`/boards/${data.board.id}/members/${member.id}`, {
-                          method: 'DELETE',
-                        }),
-                      )
-                    }
-                  >
-                    Убрать
-                  </Button>
-                )}
+                {currentUser.role === 'admin' &&
+                  member.id !== currentUser.id && (
+                    <Button
+                      variant="subtle"
+                      color="red"
+                      onClick={() =>
+                        void run(() =>
+                          api(`/boards/${data.board.id}/members/${member.id}`, {
+                            method: 'DELETE',
+                          }),
+                        )
+                      }
+                    >
+                      Убрать доступ
+                    </Button>
+                  )}
               </div>
             ))}
-            <form
-              className="settings-form member-create-form"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                const succeeded = await run(async () => {
-                  const created = await api<{ user: Person }>('/admin/users', {
-                    method: 'POST',
-                    body: JSON.stringify({ email, password }),
-                  });
-                  await api(`/boards/${data.board.id}/members`, {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      userId: created.user.id,
-                      role: 'member',
+            {currentUser.role === 'admin' ? (
+              <form
+                className="settings-form member-create-form"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  if (!memberUserId) return;
+                  const succeeded = await run(() =>
+                    api(`/boards/${data.board.id}/members`, {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        userId: memberUserId,
+                        role: 'member',
+                      }),
                     }),
-                  });
-                });
-                if (succeeded) {
-                  setEmail('');
-                  setPassword('');
-                }
-              }}
-            >
-              <TextInput
-                label="Email нового участника"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                required
-              />
-              <PasswordInput
-                label="Пароль для входа"
-                description="Не менее 10 символов"
-                minLength={10}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
-              <Button type="submit">Создать и добавить</Button>
-            </form>
+                  );
+                  if (succeeded) setMemberUserId('');
+                }}
+              >
+                <Select
+                  label="Добавить пользователя"
+                  placeholder="Выберите из активных пользователей"
+                  searchable
+                  value={memberUserId || null}
+                  onChange={(value) => setMemberUserId(value ?? '')}
+                  data={(directory.data?.users ?? [])
+                    .filter(
+                      (candidate) =>
+                        !(data.members ?? []).some(
+                          (member) => member.id === candidate.id,
+                        ),
+                    )
+                    .map((candidate) => ({
+                      value: candidate.id,
+                      label: candidate.email,
+                    }))}
+                  nothingFoundMessage="Все пользователи уже добавлены"
+                  required
+                />
+                <Button type="submit" disabled={!memberUserId}>
+                  Добавить на доску
+                </Button>
+                {directory.isError && (
+                  <Text c="red" size="sm" role="alert">
+                    Не удалось загрузить список пользователей
+                  </Text>
+                )}
+              </form>
+            ) : (
+              <Text size="sm" c="dimmed">
+                Управлять доступом может администратор.
+              </Text>
+            )}
           </Stack>
         </Tabs.Panel>
       </Tabs>
@@ -2262,16 +2725,23 @@ function CreateDepartmentPopover({
 function RenameDepartmentPopover({
   department,
   afterUpdate,
+  afterDelete,
 }: {
   department: Department;
   afterUpdate: () => Promise<unknown>;
+  afterDelete: (department: Department) => Promise<unknown>;
 }) {
   const [opened, setOpened] = useState(false),
     [name, setName] = useState(department.name),
+    [confirmDelete, setConfirmDelete] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   useEffect(() => {
-    if (!opened) setName(department.name);
+    if (!opened) {
+      setName(department.name);
+      setConfirmDelete(false);
+      setError('');
+    }
   }, [department.name, opened]);
   return (
     <Popover
@@ -2286,10 +2756,10 @@ function RenameDepartmentPopover({
           variant="subtle"
           color="gray"
           size="sm"
-          aria-label={`Переименовать отдел ${department.name}`}
+          aria-label={`Действия отдела ${department.name}`}
           onClick={() => setOpened((value) => !value)}
         >
-          <Pencil size={14} />
+          <MoreHorizontal size={16} />
         </ActionIcon>
       </Popover.Target>
       <Popover.Dropdown>
@@ -2322,6 +2792,63 @@ function RenameDepartmentPopover({
           <Button type="submit" loading={busy} disabled={!name.trim()}>
             Сохранить отдел
           </Button>
+          {!confirmDelete ? (
+            <Button
+              type="button"
+              variant="subtle"
+              color="red"
+              leftSection={<Trash2 size={15} />}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Удалить отдел
+            </Button>
+          ) : (
+            <div
+              className="user-action-panel"
+              role="alertdialog"
+              aria-labelledby={`delete-department-${department.id}`}
+            >
+              <strong id={`delete-department-${department.id}`}>
+                Удалить отдел «{department.name}»?
+              </strong>
+              <Text size="xs" c="dimmed">
+                Удалить можно только отдел без активных и архивных досок.
+              </Text>
+              <Group gap="xs" justify="flex-end">
+                <Button
+                  type="button"
+                  size="compact-sm"
+                  variant="subtle"
+                  color="gray"
+                  autoFocus
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Отмена
+                </Button>
+                <Button
+                  type="button"
+                  size="compact-sm"
+                  color="red"
+                  loading={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    setError('');
+                    void api(`/departments/${department.id}`, {
+                      method: 'DELETE',
+                    })
+                      .then(async () => {
+                        await afterDelete(department);
+                        setOpened(false);
+                      })
+                      .catch((reason) => setError(err(reason)))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  Удалить
+                </Button>
+              </Group>
+            </div>
+          )}
           {error && (
             <Text role="alert" c="red" size="sm">
               {error}
@@ -2436,13 +2963,13 @@ function SidebarContent({
   expanded,
   loading,
   error,
-  user,
   selectBoard,
   toggleDepartment,
   retry,
   boardCreated,
   departmentCreated,
   departmentsChanged,
+  departmentDeleted,
 }: {
   groups: BoardGroup[];
   departments: Department[];
@@ -2450,13 +2977,13 @@ function SidebarContent({
   expanded: Set<string>;
   loading: boolean;
   error: boolean;
-  user: User;
   selectBoard: (board: Board) => void;
   toggleDepartment: (id: string) => void;
   retry: () => Promise<unknown>;
   boardCreated: (board: Board) => Promise<void>;
   departmentCreated: (department: Department) => Promise<void>;
   departmentsChanged: () => Promise<unknown>;
+  departmentDeleted: (department: Department) => Promise<unknown>;
 }) {
   const boardCount = groups.reduce(
     (total, group) => total + group.boards.length,
@@ -2520,10 +3047,11 @@ function SidebarContent({
                     <strong>{group.name}</strong>
                     <span>{group.boards.length}</span>
                   </button>
-                  {user.role === 'admin' && group.id !== 'ungrouped' && (
+                  {group.id !== 'ungrouped' && (
                     <RenameDepartmentPopover
                       department={{ id: group.id, name: group.name }}
                       afterUpdate={departmentsChanged}
+                      afterDelete={departmentDeleted}
                     />
                   )}
                 </div>
@@ -2564,9 +3092,7 @@ function SidebarContent({
           initialDepartmentId={selected?.departmentId}
           afterCreate={boardCreated}
         />
-        {user.role === 'admin' && (
-          <CreateDepartmentPopover afterCreate={departmentCreated} />
-        )}
+        <CreateDepartmentPopover afterCreate={departmentCreated} />
       </div>
     </div>
   );
@@ -2597,6 +3123,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
     [time, setTime] = useState(false),
     [settings, setSettings] = useState(false),
     [archiveOpen, setArchiveOpen] = useState(false),
+    [usersOpen, setUsersOpen] = useState(false),
     [mobileSidebarOpen, setMobileSidebarOpen] = useState(false),
     [sidebarCollapsed, setSidebarCollapsed] = useState(
       () => window.localStorage.getItem('kanban.sidebar-collapsed') === 'true',
@@ -2732,6 +3259,18 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
     await departments.refetch();
     setExpandedDepartments((current) => new Set(current).add(created.id));
   };
+  const departmentDeleted = async (deleted: Department) => {
+    setExpandedDepartments((current) => {
+      const next = new Set(current);
+      next.delete(deleted.id);
+      return next;
+    });
+    await Promise.all([
+      departments.refetch(),
+      boards.refetch(),
+      archivedBoards.refetch(),
+    ]);
+  };
   const archiveSelectedBoard = async () => {
     if (!selected) return;
     await api(`/boards/${selected.id}/archive`, { method: 'POST' });
@@ -2745,6 +3284,14 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
     await Promise.all([boards.refetch(), archivedBoards.refetch()]);
     selectBoard(archived);
     setArchiveOpen(false);
+  };
+  const deleteBoard = async (archived: Board) => {
+    await api(`/boards/${archived.id}`, { method: 'DELETE' });
+    if (selected?.id === archived.id) {
+      setSelected(null);
+      setOpen(null);
+    }
+    await Promise.all([boards.refetch(), archivedBoards.refetch()]);
   };
   const task = useMemo(
     () =>
@@ -2822,9 +3369,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
     dueFilter,
     showArchived ? 'archived' : '',
   ].filter(Boolean).length;
-  const canManage = board.data?.members?.some(
-    (member) => member.id === user.id && member.role === 'admin',
-  );
+  const canManage = Boolean(board.data);
   const moveTask = async ({ active, over }: DragEndEvent) => {
     if (!over || !board.data || !selected) return;
     const taskId = String(active.id),
@@ -2897,13 +3442,13 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
       expanded={expandedDepartments}
       loading={boards.isLoading || departments.isLoading}
       error={boards.isError || departments.isError}
-      user={user}
       selectBoard={selectBoard}
       toggleDepartment={toggleDepartment}
       retry={() => Promise.all([boards.refetch(), departments.refetch()])}
       boardCreated={boardCreated}
       departmentCreated={departmentCreated}
       departmentsChanged={() => departments.refetch()}
+      departmentDeleted={departmentDeleted}
     />
   );
   return (
@@ -2935,6 +3480,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
           user={user}
           logout={logout}
           openArchivedBoards={() => setArchiveOpen(true)}
+          openUsers={() => setUsersOpen(true)}
         />
       </header>
       <aside className="workspace-sidebar" data-testid="desktop-sidebar">
@@ -3203,7 +3749,6 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
         <TaskDrawer
           data={board.data}
           task={task}
-          user={user}
           close={() => setOpen(null)}
           refresh={refresh}
         />
@@ -3214,6 +3759,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
       {settings && board.data && (
         <Settings
           data={board.data}
+          currentUser={user}
           departments={departments.data?.departments ?? []}
           close={() => setSettings(false)}
           refresh={refresh}
@@ -3226,6 +3772,13 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
           boards={archivedBoards.data?.boards ?? []}
           close={() => setArchiveOpen(false)}
           restore={restoreBoard}
+          destroy={deleteBoard}
+        />
+      )}
+      {usersOpen && user.role === 'admin' && (
+        <AdminUsersDrawer
+          currentUser={user}
+          close={() => setUsersOpen(false)}
         />
       )}
     </main>
