@@ -369,7 +369,18 @@ function Login({ done }: { done: (u: User) => void }) {
           }
         }}
       >
-        <h1>Канбан</h1>
+        <div className="auth-brand">
+          <img
+            src="/tfoms-yugra-logo.png"
+            alt="Логотип ТФОМС Югры"
+            width="64"
+            height="56"
+          />
+          <div>
+            <span>ТФОМС Югры</span>
+            <h1>Канбан</h1>
+          </div>
+        </div>
         <p>Вход в командную доску</p>
         <TextInput
           label="Email"
@@ -2895,8 +2906,8 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
         >
           <MenuIcon size={20} />
         </ActionIcon>
-        <div className="brand" aria-label="Канбан">
-          <span aria-hidden="true">К</span>
+        <div className="brand" aria-label="ТФОМС Югры — Канбан">
+          <img src="/tfoms-yugra-logo.png" alt="" width="38" height="34" />
           <b>Канбан</b>
         </div>
         <span data-testid="user-email" className="visually-hidden">

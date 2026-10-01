@@ -11,10 +11,16 @@ function uniqueName(prefix: string) {
 
 async function signIn(page: Page) {
   await page.goto('/');
+  await expect(
+    page.getByRole('img', { name: 'Логотип ТФОМС Югры' }),
+  ).toBeVisible();
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Пароль').fill(password);
   await page.getByRole('button', { name: 'Войти' }).click();
   await expect(page.locator('main > header')).toBeVisible();
+  await expect(
+    page.getByLabel('ТФОМС Югры — Канбан', { exact: true }),
+  ).toBeVisible();
 }
 
 async function getDepartments(page: Page) {
