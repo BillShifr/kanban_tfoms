@@ -197,6 +197,7 @@ test.describe('core board workflow', () => {
     page,
   }) => {
     await signIn(page);
+    await createBoardForTest(page);
     await page.getByRole('button', { name: email }).click();
     await page.getByRole('menuitem', { name: 'Светлое' }).click();
     await expect(page.locator('html')).toHaveAttribute(

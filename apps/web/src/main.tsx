@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -3131,7 +3131,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
     [expandedDepartments, setExpandedDepartments] = useState<Set<string>>(
       new Set(),
     ),
-    [expandedReady, setExpandedReady] = useState(false),
+    knownDepartmentGroups = useRef(new Set<string>()),
     [activeDragId, setActiveDragId] = useState<string | null>(null),
     [moveError, setMoveError] = useState('');
   const groups = useMemo<BoardGroup[]>(() => {
@@ -3202,11 +3202,18 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
     );
   }, [sidebarCollapsed]);
   useEffect(() => {
-    if (!expandedReady && groups.length) {
-      setExpandedDepartments(new Set(groups.map((group) => group.id)));
-      setExpandedReady(true);
-    }
-  }, [expandedReady, groups]);
+    const newGroupIds = groups
+      .map((group) => group.id)
+      .filter((groupId) => !knownDepartmentGroups.current.has(groupId));
+    if (!newGroupIds.length) return;
+    for (const groupId of newGroupIds)
+      knownDepartmentGroups.current.add(groupId);
+    setExpandedDepartments((current) => {
+      const next = new Set(current);
+      for (const groupId of newGroupIds) next.add(groupId);
+      return next;
+    });
+  }, [groups]);
   useEffect(() => {
     const selectedGroup = groups.find((group) =>
       group.boards.some((boardItem) => boardItem.id === selected?.id),
