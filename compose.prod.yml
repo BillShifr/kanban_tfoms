@@ -44,6 +44,12 @@ services:
     depends_on: { db: { condition: service_healthy } }
     volumes:
       - '${UPLOADS_DIR:?Set UPLOADS_DIR in the production env file}:/app/data/uploads:Z'
+    healthcheck:
+      test: ['CMD', 'node', '/app/apps/api/dist/healthcheck.js']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
     security_opt: ['no-new-privileges:true']
     cap_drop: [ALL]

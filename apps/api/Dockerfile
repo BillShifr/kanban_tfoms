@@ -27,5 +27,4 @@ COPY --chown=node:node --from=build /app/apps/api/drizzle apps/api/drizzle
 RUN mkdir -p /app/data/uploads && chown node:node /app/data/uploads
 USER node
 EXPOSE 3001
-HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=12 CMD ["node", "apps/api/dist/healthcheck.js"]
 CMD ["sh", "-c", "node apps/api/dist/migrate.js && exec node apps/api/dist/server.js"]

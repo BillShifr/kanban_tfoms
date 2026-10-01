@@ -25,6 +25,11 @@ services:
     ports: ['127.0.0.1:${KANBAN_API_PORT:-3001}:3001']
     volumes: [uploads-data:/app/data/uploads]
     depends_on: { db: { condition: service_healthy } }
+    healthcheck:
+      test: ['CMD', 'node', '/app/apps/api/dist/healthcheck.js']
+      interval: 5s
+      timeout: 3s
+      retries: 20
   web:
     build: { context: ., dockerfile: apps/web/Dockerfile }
     ports: ['127.0.0.1:${KANBAN_WEB_PORT:-5173}:8080']

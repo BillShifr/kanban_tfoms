@@ -32,17 +32,18 @@ describe('container deployment configuration', () => {
     }
   });
 
-  it('keeps the API healthcheck in the image to avoid compose command rewriting', () => {
-    expect(apiDockerfile).toContain(
-      'CMD ["node", "apps/api/dist/healthcheck.js"]',
-    );
+  it('uses a shell-free Compose healthcheck that works with OCI images', () => {
+    expect(apiDockerfile).not.toContain('HEALTHCHECK');
 
     for (const composeFile of [developmentCompose, productionCompose]) {
       const apiService = composeFile
         .split('\n  api:\n')[1]
         ?.split('\n  web:\n')[0];
 
-      expect(apiService).not.toContain('healthcheck:');
+      expect(apiService).toContain('healthcheck:');
+      expect(apiService).toContain(
+        "test: ['CMD', 'node', '/app/apps/api/dist/healthcheck.js']",
+      );
       expect(apiService).not.toContain('node -e');
       expect(apiService).not.toContain('fetch(');
     }
