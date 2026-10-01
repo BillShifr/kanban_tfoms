@@ -128,7 +128,10 @@ async function createBoardForTest(page: Page) {
 }
 
 async function chooseOption(page: Page, label: string, option: string) {
-  await page.getByRole('textbox', { name: label, exact: true }).click();
+  const control = page.getByRole('textbox', { name: label, exact: true });
+  await control.click();
+  if ((await control.getAttribute('readonly')) === null)
+    await control.fill(option);
   const item = page.getByRole('option', { name: option, exact: true });
   await expect(item).toBeVisible();
   await item.click();
