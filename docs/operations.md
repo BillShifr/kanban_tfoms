@@ -154,6 +154,7 @@ integration-тесты, production build и Playwright на desktop/mobile. Се
 ```sh
 cd "$HOME/apps/minimal-kanban"
 git pull --ff-only origin main
+loginctl show-user "$USER" -p Linger
 chmod +x deploy/*.sh
 mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/state/minimal-kanban"
 cp deploy/systemd/kanban-autodeploy.service \
@@ -166,6 +167,10 @@ systemctl --user start kanban-autodeploy.service
 systemctl --user status kanban-autodeploy.timer --no-pager
 journalctl --user -u kanban-autodeploy.service -n 100 --no-pager
 ```
+
+Если `loginctl` показывает `Linger=no`, DevOps должен один раз выполнить
+`sudo loginctl enable-linger vladislav`. Без linger пользовательский таймер может
+перестать запускаться после выхода `vladislav` из SSH.
 
 Каждое обновление выполняется под `vladislav` и последовательно:
 
