@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const email = process.env.E2E_EMAIL ?? 'admin@example.com';
 const password = process.env.E2E_PASSWORD ?? 'change-me-now';
@@ -118,10 +118,116 @@ async function addTask(page: Page, title: string) {
   await expect(backlog.getByText(title, { exact: true })).toBeVisible();
 }
 
+async function expectReadableText(
+  locator: Locator,
+  pseudoElement: string | null = null,
+) {
+  await expect(locator).toBeVisible();
+  const contrast = await locator.evaluate((element, pseudo) => {
+    const parse = (value: string) => {
+      const channels = value.match(/[\d.]+/g)?.map(Number) ?? [];
+      return {
+        red: channels[0] ?? 0,
+        green: channels[1] ?? 0,
+        blue: channels[2] ?? 0,
+        alpha: channels[3] ?? 1,
+      };
+    };
+    const composite = (
+      foreground: ReturnType<typeof parse>,
+      background: ReturnType<typeof parse>,
+    ) => ({
+      red:
+        foreground.red * foreground.alpha +
+        background.red * (1 - foreground.alpha),
+      green:
+        foreground.green * foreground.alpha +
+        background.green * (1 - foreground.alpha),
+      blue:
+        foreground.blue * foreground.alpha +
+        background.blue * (1 - foreground.alpha),
+      alpha: 1,
+    });
+    const layers: ReturnType<typeof parse>[] = [];
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      layers.unshift(parse(getComputedStyle(node).backgroundColor));
+    }
+    const background = layers.reduce(
+      (result, layer) => composite(layer, result),
+      { red: 255, green: 255, blue: 255, alpha: 1 },
+    );
+    const foreground = composite(
+      parse(getComputedStyle(element, pseudo).color),
+      background,
+    );
+    const luminance = (color: ReturnType<typeof parse>) => {
+      const channel = (value: number) => {
+        const normalized = value / 255;
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      };
+      return (
+        0.2126 * channel(color.red) +
+        0.7152 * channel(color.green) +
+        0.0722 * channel(color.blue)
+      );
+    };
+    const foregroundLuminance = luminance(foreground);
+    const backgroundLuminance = luminance(background);
+    return (
+      (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+      (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+    );
+  }, pseudoElement);
+  expect(contrast).toBeGreaterThanOrEqual(4.5);
+}
+
 test.describe('core board workflow', () => {
   test('signs in through the Russian interface', async ({ page }) => {
     await signIn(page);
     await expect(page.getByTestId('user-email')).toHaveText(email);
+  });
+
+  test('keeps primary light-theme controls and labels readable', async ({
+    page,
+  }) => {
+    await signIn(page);
+    await page.getByRole('button', { name: email }).click();
+    await page.getByRole('menuitem', { name: 'Светлое' }).click();
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-mantine-color-scheme',
+      'light',
+    );
+
+    const navigation = await openNavigation(page);
+    await expectReadableText(navigation.locator('.aside-heading h2'));
+    await expectReadableText(
+      navigation.getByRole('button', { name: 'Создать доску', exact: true }),
+    );
+    await expectReadableText(
+      navigation.getByRole('button', { name: 'Создать отдел', exact: true }),
+    );
+    if (
+      await page.getByRole('button', { name: 'Открыть меню досок' }).isVisible()
+    ) {
+      await page.keyboard.press('Escape');
+    }
+    await expectReadableText(page.getByRole('button', { name: email }));
+    await expectReadableText(page.locator('#board-title'));
+    await expectReadableText(
+      page.getByTestId('kanban-column').first().locator('header h2'),
+    );
+    await expectReadableText(
+      page
+        .getByTestId('kanban-column')
+        .first()
+        .locator('.column-header-actions > span'),
+    );
+    await expectReadableText(
+      page.getByPlaceholder('Поиск по задачам'),
+      '::placeholder',
+    );
   });
 
   test('creates a department and a board in nested navigation', async ({
@@ -632,11 +738,14 @@ test.describe('core board workflow', () => {
     await signIn(page);
     await page.getByRole('button', { name: 'Настроить доску' }).click();
     await page.getByRole('tab', { name: 'Участники' }).click();
-    await page
-      .getByLabel('Email нового участника')
-      .fill(`member-${Date.now()}@example.test`);
+    const memberEmail = `member-${Date.now()}@example.test`;
+    await page.getByLabel('Email нового участника').fill(memberEmail);
     await page.getByLabel('Временный пароль').fill('member-pass-123');
     await page.getByRole('button', { name: 'Создать и добавить' }).click();
+    await expect(page.getByText(memberEmail, { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Email нового участника')).toHaveValue('');
+    await expect(page.getByLabel('Временный пароль')).toHaveValue('');
+    await expect(page.getByRole('alert')).toHaveCount(0);
     await page.getByRole('tab', { name: 'Колонки' }).click();
     const columnName = `Проверка ${Date.now()}`;
     await page.getByLabel('Новая колонка').fill(columnName);

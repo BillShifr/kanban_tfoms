@@ -189,6 +189,9 @@ const ru: Record<string, string> = {
   LAST_COLUMN: 'На доске должна остаться хотя бы одна колонка',
   DEPARTMENT_NAME_TAKEN: 'Отдел с таким названием уже существует',
   DEPARTMENT_NOT_FOUND: 'Отдел не найден',
+  EMAIL_TAKEN: 'Пользователь с таким email уже существует',
+  ALREADY_MEMBER: 'Пользователь уже добавлен на эту доску',
+  USER_NOT_FOUND: 'Пользователь не найден',
 };
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const form = init.body instanceof FormData,
@@ -200,17 +203,27 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
         ...(form || !hasBody ? {} : { 'content-type': 'application/json' }),
         ...(init.headers ?? {}),
       },
-    });
+    }),
+    body = await r.text();
   if (!r.ok) {
     let x: Fail = {};
-    try {
-      x = (await r.json()) as Fail;
-    } catch {
+    if (body) {
+      try {
+        x = JSON.parse(body) as Fail;
+      } catch {
+        x.message = r.statusText;
+      }
+    } else {
       x.message = r.statusText;
     }
     throw x;
   }
-  return r.status === 204 ? (undefined as T) : (r.json() as Promise<T>);
+  if (!body) return undefined as T;
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error('Сервер вернул некорректный ответ');
+  }
 }
 function err(e: unknown) {
   return typeof e === 'object' && e !== null
@@ -1711,8 +1724,10 @@ function Settings({
       setError('');
       await f();
       await refresh();
+      return true;
     } catch (e) {
       setError(err(e));
+      return false;
     }
   };
   return (
@@ -2133,21 +2148,23 @@ function Settings({
               className="settings-form member-create-form"
               onSubmit={async (event) => {
                 event.preventDefault();
-                const created = await api<{ user: Person }>('/admin/users', {
-                  method: 'POST',
-                  body: JSON.stringify({ email, password }),
-                });
-                await run(() =>
-                  api(`/boards/${data.board.id}/members`, {
+                const succeeded = await run(async () => {
+                  const created = await api<{ user: Person }>('/admin/users', {
+                    method: 'POST',
+                    body: JSON.stringify({ email, password }),
+                  });
+                  await api(`/boards/${data.board.id}/members`, {
                     method: 'POST',
                     body: JSON.stringify({
                       userId: created.user.id,
                       role: 'member',
                     }),
-                  }),
-                );
-                setEmail('');
-                setPassword('');
+                  });
+                });
+                if (succeeded) {
+                  setEmail('');
+                  setPassword('');
+                }
               }}
             >
               <TextInput
