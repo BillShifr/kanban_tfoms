@@ -740,11 +740,11 @@ test.describe('core board workflow', () => {
     await page.getByRole('tab', { name: 'Участники' }).click();
     const memberEmail = `member-${Date.now()}@example.test`;
     await page.getByLabel('Email нового участника').fill(memberEmail);
-    await page.getByLabel('Временный пароль').fill('member-pass-123');
+    await page.getByLabel('Пароль для входа').fill('member-pass-123');
     await page.getByRole('button', { name: 'Создать и добавить' }).click();
     await expect(page.getByText(memberEmail, { exact: true })).toBeVisible();
     await expect(page.getByLabel('Email нового участника')).toHaveValue('');
-    await expect(page.getByLabel('Временный пароль')).toHaveValue('');
+    await expect(page.getByLabel('Пароль для входа')).toHaveValue('');
     await expect(page.getByRole('alert')).toHaveCount(0);
     await page.getByRole('tab', { name: 'Колонки' }).click();
     const columnName = `Проверка ${Date.now()}`;

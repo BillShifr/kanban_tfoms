@@ -2175,7 +2175,8 @@ function Settings({
                 required
               />
               <PasswordInput
-                label="Временный пароль"
+                label="Пароль для входа"
+                description="Не менее 10 символов"
                 minLength={10}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
