@@ -25,6 +25,7 @@ import {
   boards,
   columns,
   departments,
+  departmentMembers,
   labels,
   sessions,
   taskLabels,
@@ -41,6 +42,12 @@ import {
   normalizeEmail,
   parseDateInput,
 } from './domain.js';
+import {
+  canChangeAccountRole,
+  canManageAccount,
+  isElevated,
+  type AccountRole,
+} from './policy.js';
 import { assertBootstrapCredentials, loadRuntimeConfig } from './config.js';
 const runtime = loadRuntimeConfig();
 const cookieName = 'kanban_session',
@@ -85,7 +92,7 @@ const credentials = z
     }
     return parsed;
   });
-const accountRole = z.enum(['admin', 'user']);
+const accountRole = z.enum(['superadmin', 'admin', 'user']);
 const adminUserCreateInput = z
   .object({
     email: z.string().trim().email().max(254),
@@ -100,6 +107,18 @@ const adminUserPatchInput = z
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
+const accessInput = z
+  .object({
+    departmentIds: z
+      .array(z.string().uuid())
+      .max(200)
+      .transform((v) => [...new Set(v)]),
+    boardIds: z
+      .array(z.string().uuid())
+      .max(500)
+      .transform((v) => [...new Set(v)]),
+  })
+  .strict();
 const assigneeName = z
   .string()
   .trim()
@@ -160,7 +179,7 @@ const moveInput = z
     beforeTaskId: z.string().uuid().nullable().optional(),
   })
   .strict();
-type User = { id: string; email: string; role: 'admin' | 'user' };
+type User = { id: string; email: string; role: AccountRole };
 const id = (r: FastifyRequest, n: string) =>
   z
     .string()
@@ -173,7 +192,7 @@ const hashPassword = (password: string) =>
     timeCost: 2,
     parallelism: 1,
   });
-async function seedAdmin() {
+async function seedSuperadmin() {
   const email = process.env.INITIAL_ADMIN_EMAIL,
     password = process.env.INITIAL_ADMIN_PASSWORD;
   const count = await pool.query<{ count: string }>(
@@ -196,7 +215,7 @@ async function seedAdmin() {
     id: crypto.randomUUID(),
     email: normalized,
     passwordHash: await hashPassword(password),
-    role: 'admin',
+    role: 'superadmin',
   });
 }
 async function member(
@@ -204,25 +223,71 @@ async function member(
   userId: string,
   includeArchivedBoard = false,
 ) {
+  const result = await pool.query<{ exists: boolean }>(
+    `select exists(
+       select 1 from boards b join users u on u.id = $2
+       where b.id = $1 and u.archived_at is null
+         and ($3::boolean or b.archived_at is null)
+         and (u.role in ('superadmin', 'admin')
+           or exists (select 1 from board_members bm where bm.board_id=b.id and bm.user_id=u.id)
+           or exists (select 1 from department_members dm where dm.department_id=b.department_id and dm.user_id=u.id))
+     ) as exists`,
+    [boardId, userId, includeArchivedBoard],
+  );
+  return result.rows[0]?.exists ?? false;
+}
+
+async function departmentVisible(departmentId: string, user: User) {
+  if (isElevated(user.role))
+    return Boolean(
+      (
+        await db
+          .select({ id: departments.id })
+          .from(departments)
+          .where(eq(departments.id, departmentId))
+          .limit(1)
+      )[0],
+    );
   return Boolean(
     (
       await db
-        .select({ id: boards.id })
-        .from(boards)
-        .innerJoin(boardMembers, eq(boardMembers.boardId, boards.id))
-        .innerJoin(users, eq(users.id, boardMembers.userId))
+        .select({ id: departments.id })
+        .from(departments)
+        .leftJoin(
+          departmentMembers,
+          eq(departmentMembers.departmentId, departments.id),
+        )
+        .leftJoin(boards, eq(boards.departmentId, departments.id))
+        .leftJoin(boardMembers, eq(boardMembers.boardId, boards.id))
         .where(
           and(
-            eq(boards.id, boardId),
-            eq(boardMembers.userId, userId),
-            isNull(users.archivedAt),
-            includeArchivedBoard ? undefined : isNull(boards.archivedAt),
+            eq(departments.id, departmentId),
+            sql`(${departmentMembers.userId} = ${user.id} or ${boardMembers.userId} = ${user.id})`,
           ),
         )
         .limit(1)
     )[0],
   );
 }
+
+async function assignedToDepartment(departmentId: string, user: User) {
+  if (isElevated(user.role)) return true;
+  return Boolean(
+    (
+      await db
+        .select({ userId: departmentMembers.userId })
+        .from(departmentMembers)
+        .where(
+          and(
+            eq(departmentMembers.departmentId, departmentId),
+            eq(departmentMembers.userId, user.id),
+          ),
+        )
+        .limit(1)
+    )[0],
+  );
+}
+
 async function boardOr404(
   boardId: string,
   userId: string,
@@ -495,15 +560,33 @@ export async function buildApp() {
   app.get('/departments', async (r, reply) => {
     const u = await user(r, reply);
     if (!u) return;
+    if (isElevated(u.role))
+      return {
+        departments: await db
+          .select({
+            id: departments.id,
+            name: departments.name,
+            createdAt: departments.createdAt,
+            canManage: sql<boolean>`true`,
+          })
+          .from(departments)
+          .orderBy(departments.name, departments.id),
+      };
     return {
-      departments: await db
-        .select({
-          id: departments.id,
-          name: departments.name,
-          createdAt: departments.createdAt,
-        })
-        .from(departments)
-        .orderBy(departments.name, departments.id),
+      departments: (
+        await pool.query(
+          `select d.id,d.name,d.created_at as "createdAt",
+                  bool_or(dm.user_id is not null) as "canManage"
+         from departments d
+         left join department_members dm on dm.department_id=d.id and dm.user_id=$1
+         left join boards b on b.department_id=d.id
+         left join board_members bm on bm.board_id=b.id and bm.user_id=$1
+         where dm.user_id is not null or bm.user_id is not null
+         group by d.id,d.name,d.created_at
+         order by d.name,d.id`,
+          [u.id],
+        )
+      ).rows,
     };
   });
   app.post('/departments', async (r, reply) => {
@@ -514,9 +597,18 @@ export async function buildApp() {
     const department = {
       id: crypto.randomUUID(),
       name: p.data.name,
+      canManage: true,
     };
     try {
-      await db.insert(departments).values(department);
+      await db.transaction(async (tx) => {
+        await tx
+          .insert(departments)
+          .values({ id: department.id, name: department.name });
+        if (u.role === 'user')
+          await tx
+            .insert(departmentMembers)
+            .values({ departmentId: department.id, userId: u.id });
+      });
     } catch (error) {
       if (
         typeof error === 'object' &&
@@ -537,6 +629,8 @@ export async function buildApp() {
     if (!d.success)
       return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    if (!(await assignedToDepartment(d.data, u)))
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
     try {
       const updated = await db
         .update(departments)
@@ -563,6 +657,8 @@ export async function buildApp() {
     if (!u) return;
     if (!d.success)
       return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
+    if (!(await assignedToDepartment(d.data, u)))
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
     const result = await db.transaction(async (tx) => {
       const department = await tx.execute(
         sql`select id from departments where id = ${d.data} for update`,
@@ -585,28 +681,138 @@ export async function buildApp() {
       return reply.code(409).send({ code: result });
     return reply.code(204).send();
   });
+  app.get('/departments/:departmentId/members', async (r, reply) => {
+    const u = await user(r, reply),
+      d = id(r, 'departmentId');
+    if (!u) return;
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!d.success || !(await departmentVisible(d.data, u)))
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
+    return {
+      members: await db
+        .select({
+          id: users.id,
+          email: users.email,
+          accountRole: users.role,
+          archivedAt: users.archivedAt,
+        })
+        .from(departmentMembers)
+        .innerJoin(users, eq(users.id, departmentMembers.userId))
+        .where(eq(departmentMembers.departmentId, d.data))
+        .orderBy(users.email, users.id),
+    };
+  });
+  app.post('/departments/:departmentId/members', async (r, reply) => {
+    const u = await user(r, reply),
+      d = id(r, 'departmentId'),
+      p = z.object({ userId: z.string().uuid() }).strict().safeParse(r.body);
+    if (!u) return;
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!d.success || !(await departmentVisible(d.data, u)))
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    try {
+      const added = await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-active-admins'))`,
+        );
+        const target = (
+          await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(
+              and(
+                eq(users.id, p.data.userId),
+                eq(users.role, 'user'),
+                isNull(users.archivedAt),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (!target) return false;
+        await tx
+          .insert(departmentMembers)
+          .values({ departmentId: d.data, userId: p.data.userId });
+        return true;
+      });
+      if (!added) return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error &&
+        'code' in error &&
+        error.code === '23505'
+      )
+        return reply.code(409).send({ code: 'ALREADY_MEMBER' });
+      throw error;
+    }
+    return reply.code(201).send();
+  });
+  app.delete('/departments/:departmentId/members/:userId', async (r, reply) => {
+    const u = await user(r, reply),
+      d = id(r, 'departmentId'),
+      target = id(r, 'userId');
+    if (!u) return;
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!d.success || !target.success || !(await departmentVisible(d.data, u)))
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
+    const removed = await db.transaction(async (tx) => {
+      const deleted = await tx
+        .delete(departmentMembers)
+        .where(
+          and(
+            eq(departmentMembers.departmentId, d.data),
+            eq(departmentMembers.userId, target.data),
+          ),
+        )
+        .returning({ userId: departmentMembers.userId });
+      if (!deleted[0]) return false;
+      const now = new Date();
+      await tx.execute(sql`
+        insert into task_events(id, task_id, actor_id, type, from_assignee_id)
+        select gen_random_uuid(), t.id, ${u.id}, 'assignee_changed', t.assignee_id
+        from tasks t
+        where t.assignee_id = ${target.data}
+          and t.board_id in (select id from boards where department_id = ${d.data})
+          and not kanban_has_board_access(t.board_id, ${target.data})
+      `);
+      await tx.execute(sql`
+        update tasks set assignee_id = null, updated_at = ${now}
+        where assignee_id = ${target.data}
+          and board_id in (select id from boards where department_id = ${d.data})
+          and not kanban_has_board_access(board_id, ${target.data})
+      `);
+      await tx.execute(sql`
+        update time_entries set stopped_at = ${now}
+        where user_id = ${target.data} and stopped_at is null
+          and task_id in (
+            select t.id from tasks t join boards b on b.id=t.board_id
+            where b.department_id = ${d.data} and not kanban_has_board_access(t.board_id, ${target.data})
+          )
+      `);
+      return true;
+    });
+    if (!removed) return reply.code(404).send({ code: 'MEMBER_NOT_FOUND' });
+    return reply.code(204).send();
+  });
   app.get('/boards', async (r, reply) => {
     const u = await user(r, reply);
     if (!u) return;
     const includeArchived =
       (r.query as Record<string, string | undefined>).archived === 'true';
     return {
-      boards: await db
-        .select({
-          id: boards.id,
-          name: boards.name,
-          departmentId: boards.departmentId,
-          createdAt: boards.createdAt,
-          archivedAt: boards.archivedAt,
-        })
-        .from(boards)
-        .innerJoin(boardMembers, eq(boardMembers.boardId, boards.id))
-        .where(
-          includeArchived
-            ? and(eq(boardMembers.userId, u.id), isNotNull(boards.archivedAt))
-            : and(eq(boardMembers.userId, u.id), isNull(boards.archivedAt)),
+      boards: (
+        await pool.query(
+          `select b.id,b.name,b.department_id as "departmentId",b.created_at as "createdAt",b.archived_at as "archivedAt"
+         from boards b
+         where ($2::boolean = (b.archived_at is not null))
+           and ( $3::boolean
+             or exists (select 1 from board_members bm where bm.board_id=b.id and bm.user_id=$1)
+             or exists (select 1 from department_members dm where dm.department_id=b.department_id and dm.user_id=$1))
+         order by b.created_at`,
+          [u.id, includeArchived, isElevated(u.role)],
         )
-        .orderBy(boards.createdAt),
+      ).rows,
     };
   });
   app.post('/boards', async (r, reply) => {
@@ -624,6 +830,8 @@ export async function buildApp() {
       )[0]
     )
       return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
+    if (!(await assignedToDepartment(p.data.departmentId, u)))
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
     const board = {
       id: crypto.randomUUID(),
       name: p.data.name,
@@ -632,9 +840,6 @@ export async function buildApp() {
     };
     await db.transaction(async (tx) => {
       await tx.insert(boards).values(board);
-      await tx
-        .insert(boardMembers)
-        .values({ boardId: board.id, userId: u.id, role: 'admin' });
       await tx.insert(columns).values(
         defaultColumns.map((name, i) => ({
           id: crypto.randomUUID(),
@@ -696,17 +901,21 @@ export async function buildApp() {
         .where(and(eq(columns.boardId, p.data), isNull(columns.archivedAt)))
         .orderBy(columns.position),
       rawTasks = await boardTasks(p.data, includeArchived),
-      members = await db
-        .select({
-          id: users.id,
-          email: users.email,
-          role: boardMembers.role,
-          accountRole: users.role,
-          archivedAt: users.archivedAt,
-        })
-        .from(boardMembers)
-        .innerJoin(users, eq(users.id, boardMembers.userId))
-        .where(eq(boardMembers.boardId, p.data)),
+      members = (
+        await pool.query(
+          `select u.id,u.email,'member'::text as role,u.role as "accountRole",u.archived_at as "archivedAt",
+          case when u.role in ('superadmin','admin') then 'global'
+               when bm.user_id is not null and dm.user_id is not null then 'both'
+               when bm.user_id is not null then 'board'
+               else 'department' end as "accessSource"
+         from users u
+         left join board_members bm on bm.board_id=$1 and bm.user_id=u.id
+         left join department_members dm on dm.department_id=(select department_id from boards where id=$1) and dm.user_id=u.id
+         where u.archived_at is null and (u.role in ('superadmin','admin') or bm.user_id is not null or dm.user_id is not null)
+         order by u.email,u.id`,
+          [p.data],
+        )
+      ).rows,
       boardTopics = await db
         .select({ id: topics.id, name: topics.name, color: topics.color })
         .from(topics)
@@ -1136,24 +1345,11 @@ export async function buildApp() {
     return reply.code(204).send();
   });
   async function owned(taskId: string, userId: string) {
-    return Boolean(
-      (
-        await db
-          .select({ id: tasks.id })
-          .from(tasks)
-          .innerJoin(boardMembers, eq(boardMembers.boardId, tasks.boardId))
-          .innerJoin(boards, eq(boards.id, tasks.boardId))
-          .where(
-            and(
-              eq(tasks.id, taskId),
-              eq(boardMembers.userId, userId),
-              isNull(tasks.archivedAt),
-              isNull(boards.archivedAt),
-            ),
-          )
-          .limit(1)
-      )[0],
+    const result = await pool.query<{ exists: boolean }>(
+      `select exists(select 1 from tasks t where t.id=$1 and t.archived_at is null and kanban_has_board_access(t.board_id,$2)) as exists`,
+      [taskId, userId],
     );
+    return result.rows[0]?.exists ?? false;
   }
   app.post('/tasks/:taskId/timer/start', async (r, reply) => {
     const u = await user(r, reply),
@@ -1182,6 +1378,21 @@ export async function buildApp() {
     if (!u) return;
     if (!p.success)
       return reply.code(404).send({ code: 'TIME_ENTRY_NOT_FOUND' });
+    const active = (
+      await db
+        .select({ taskId: timeEntries.taskId })
+        .from(timeEntries)
+        .where(
+          and(
+            eq(timeEntries.id, p.data),
+            eq(timeEntries.userId, u.id),
+            isNull(timeEntries.stoppedAt),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!active || !(await owned(active.taskId, u.id)))
+      return reply.code(404).send({ code: 'ACTIVE_TIMER_NOT_FOUND' });
     const entry = (
       await db
         .update(timeEntries)
@@ -1252,7 +1463,7 @@ export async function buildApp() {
         .strict()
         .safeParse(r.query);
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     const statusFilter =
       p.data.status === 'active'
@@ -1260,26 +1471,67 @@ export async function buildApp() {
         : p.data.status === 'archived'
           ? isNotNull(users.archivedAt)
           : undefined;
+    const baseUsers = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        role: users.role,
+        createdAt: users.createdAt,
+        archivedAt: users.archivedAt,
+      })
+      .from(users)
+      .where(
+        and(
+          statusFilter,
+          u.role === 'admin' ? eq(users.role, 'user') : undefined,
+        ),
+      )
+      .orderBy(users.email, users.id);
+    const userIds = baseUsers.map((item) => item.id);
+    const [departmentLinks, boardLinks] = userIds.length
+      ? await Promise.all([
+          db
+            .select({
+              userId: departmentMembers.userId,
+              departmentId: departmentMembers.departmentId,
+            })
+            .from(departmentMembers)
+            .where(inArray(departmentMembers.userId, userIds)),
+          db
+            .select({
+              userId: boardMembers.userId,
+              boardId: boardMembers.boardId,
+            })
+            .from(boardMembers)
+            .where(inArray(boardMembers.userId, userIds)),
+        ])
+      : [[], []];
     return {
-      users: await db
-        .select({
-          id: users.id,
-          email: users.email,
-          role: users.role,
-          createdAt: users.createdAt,
-          archivedAt: users.archivedAt,
-        })
-        .from(users)
-        .where(statusFilter)
-        .orderBy(users.email, users.id),
+      users: baseUsers.map((item) => {
+        const departmentIds = departmentLinks
+          .filter((link) => link.userId === item.id)
+          .map((link) => link.departmentId);
+        const boardIds = boardLinks
+          .filter((link) => link.userId === item.id)
+          .map((link) => link.boardId);
+        return {
+          ...item,
+          departmentIds,
+          boardIds,
+          departmentCount: departmentIds.length,
+          boardCount: boardIds.length,
+        };
+      }),
     };
   });
   app.post('/admin/users', async (r, reply) => {
     const u = await user(r, reply),
       p = adminUserCreateInput.safeParse(r.body);
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    if (u.role === 'admin' && p.data.role !== 'user')
+      return reply.code(403).send({ code: 'FORBIDDEN' });
     const created = {
       id: crypto.randomUUID(),
       email: normalizeEmail(p.data.email),
@@ -1312,12 +1564,14 @@ export async function buildApp() {
       targetId = id(r, 'userId'),
       p = adminUserPatchInput.safeParse(r.body);
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!targetId.success)
       return reply.code(404).send({ code: 'USER_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     if (targetId.data === u.id && p.data.role !== undefined)
       return reply.code(409).send({ code: 'SELF_ROLE_CHANGE' });
+    if (p.data.role !== undefined && !canChangeAccountRole(u.role))
+      return reply.code(403).send({ code: 'FORBIDDEN' });
     const passwordHash = p.data.password
       ? await hashPassword(p.data.password)
       : undefined;
@@ -1333,13 +1587,14 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!target) return 'USER_NOT_FOUND';
-      if (target.role === 'admin' && p.data.role === 'user') {
-        const activeAdmins = await tx
+      if (!canManageAccount(u.role, target.role)) return 'FORBIDDEN';
+      if (target.role === 'superadmin' && p.data.role !== 'superadmin') {
+        const activeSuperadmins = await tx
           .select({ id: users.id })
           .from(users)
-          .where(and(eq(users.role, 'admin'), isNull(users.archivedAt)))
+          .where(and(eq(users.role, 'superadmin'), isNull(users.archivedAt)))
           .limit(2);
-        if (activeAdmins.length <= 1) return 'LAST_ADMIN';
+        if (activeSuperadmins.length <= 1) return 'LAST_SUPERADMIN';
       }
       await tx
         .update(users)
@@ -1350,18 +1605,49 @@ export async function buildApp() {
         .where(eq(users.id, targetId.data));
       if (passwordHash !== undefined)
         await tx.delete(sessions).where(eq(sessions.userId, targetId.data));
+      if (p.data.role !== undefined && p.data.role !== target.role) {
+        await tx
+          .delete(boardMembers)
+          .where(eq(boardMembers.userId, targetId.data));
+        await tx
+          .delete(departmentMembers)
+          .where(eq(departmentMembers.userId, targetId.data));
+        if (p.data.role === 'user') {
+          const now = new Date();
+          await tx.execute(sql`
+            insert into task_events(id, task_id, actor_id, type, from_assignee_id)
+            select gen_random_uuid(), t.id, ${u.id}, 'assignee_changed', t.assignee_id
+            from tasks t where t.assignee_id = ${targetId.data}
+          `);
+          await tx
+            .update(tasks)
+            .set({ assigneeId: null, updatedAt: now })
+            .where(eq(tasks.assigneeId, targetId.data));
+          await tx
+            .update(timeEntries)
+            .set({ stoppedAt: now })
+            .where(
+              and(
+                eq(timeEntries.userId, targetId.data),
+                isNull(timeEntries.stoppedAt),
+              ),
+            );
+        }
+      }
       return 'OK';
     });
     if (result === 'USER_NOT_FOUND')
       return reply.code(404).send({ code: result });
-    if (result === 'LAST_ADMIN') return reply.code(409).send({ code: result });
+    if (result === 'FORBIDDEN') return reply.code(403).send({ code: result });
+    if (result === 'LAST_SUPERADMIN')
+      return reply.code(409).send({ code: result });
     return reply.code(204).send();
   });
   app.delete('/admin/users/:userId', async (r, reply) => {
     const u = await user(r, reply),
       targetId = id(r, 'userId');
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!targetId.success)
       return reply.code(404).send({ code: 'USER_NOT_FOUND' });
     if (targetId.data === u.id)
@@ -1378,13 +1664,14 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!target) return 'USER_NOT_FOUND';
-      if (target.role === 'admin') {
-        const activeAdmins = await tx
+      if (!canManageAccount(u.role, target.role)) return 'FORBIDDEN';
+      if (target.role === 'superadmin') {
+        const activeSuperadmins = await tx
           .select({ id: users.id })
           .from(users)
-          .where(and(eq(users.role, 'admin'), isNull(users.archivedAt)))
+          .where(and(eq(users.role, 'superadmin'), isNull(users.archivedAt)))
           .limit(2);
-        if (activeAdmins.length <= 1) return 'LAST_ADMIN';
+        if (activeSuperadmins.length <= 1) return 'LAST_SUPERADMIN';
       }
       const now = new Date();
       await tx
@@ -1398,6 +1685,21 @@ export async function buildApp() {
         );
       await tx.delete(sessions).where(eq(sessions.userId, targetId.data));
       await tx
+        .delete(boardMembers)
+        .where(eq(boardMembers.userId, targetId.data));
+      await tx
+        .delete(departmentMembers)
+        .where(eq(departmentMembers.userId, targetId.data));
+      await tx.execute(sql`
+        insert into task_events(id, task_id, actor_id, type, from_assignee_id)
+        select gen_random_uuid(), t.id, ${u.id}, 'assignee_changed', t.assignee_id
+        from tasks t where t.assignee_id = ${targetId.data}
+      `);
+      await tx
+        .update(tasks)
+        .set({ assigneeId: null, updatedAt: now })
+        .where(eq(tasks.assigneeId, targetId.data));
+      await tx
         .update(users)
         .set({ archivedAt: now })
         .where(eq(users.id, targetId.data));
@@ -1405,22 +1707,127 @@ export async function buildApp() {
     });
     if (result === 'USER_NOT_FOUND')
       return reply.code(404).send({ code: result });
-    if (result === 'LAST_ADMIN') return reply.code(409).send({ code: result });
+    if (result === 'FORBIDDEN') return reply.code(403).send({ code: result });
+    if (result === 'LAST_SUPERADMIN')
+      return reply.code(409).send({ code: result });
     return reply.code(204).send();
   });
   app.post('/admin/users/:userId/restore', async (r, reply) => {
     const u = await user(r, reply),
       targetId = id(r, 'userId');
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!targetId.success)
       return reply.code(404).send({ code: 'USER_NOT_FOUND' });
-    const restored = await db
-      .update(users)
-      .set({ archivedAt: null })
-      .where(and(eq(users.id, targetId.data), isNotNull(users.archivedAt)))
-      .returning({ id: users.id });
-    if (!restored[0]) return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-active-admins'))`,
+      );
+      const target = (
+        await tx
+          .select({ role: users.role })
+          .from(users)
+          .where(and(eq(users.id, targetId.data), isNotNull(users.archivedAt)))
+          .limit(1)
+      )[0];
+      if (!target) return 'USER_NOT_FOUND';
+      if (!canManageAccount(u.role, target.role)) return 'FORBIDDEN';
+      await tx
+        .update(users)
+        .set({ archivedAt: null })
+        .where(eq(users.id, targetId.data));
+      return 'OK';
+    });
+    if (result === 'USER_NOT_FOUND')
+      return reply.code(404).send({ code: result });
+    if (result === 'FORBIDDEN') return reply.code(403).send({ code: result });
+    return reply.code(204).send();
+  });
+  app.put('/admin/users/:userId/access', async (r, reply) => {
+    const u = await user(r, reply),
+      targetId = id(r, 'userId'),
+      p = accessInput.safeParse(r.body);
+    if (!u) return;
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!targetId.success)
+      return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-active-admins'))`,
+      );
+      const target = (
+        await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            and(
+              eq(users.id, targetId.data),
+              eq(users.role, 'user'),
+              isNull(users.archivedAt),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!target) return 'USER_NOT_FOUND';
+      const existingDepartments = p.data.departmentIds.length
+        ? await tx
+            .select({ id: departments.id })
+            .from(departments)
+            .where(inArray(departments.id, p.data.departmentIds))
+        : [];
+      const existingBoards = p.data.boardIds.length
+        ? await tx
+            .select({ id: boards.id })
+            .from(boards)
+            .where(inArray(boards.id, p.data.boardIds))
+        : [];
+      if (
+        existingDepartments.length !== p.data.departmentIds.length ||
+        existingBoards.length !== p.data.boardIds.length
+      )
+        return 'ASSIGNMENT_TARGET_NOT_FOUND';
+      await tx
+        .delete(boardMembers)
+        .where(eq(boardMembers.userId, targetId.data));
+      await tx
+        .delete(departmentMembers)
+        .where(eq(departmentMembers.userId, targetId.data));
+      if (p.data.departmentIds.length)
+        await tx.insert(departmentMembers).values(
+          p.data.departmentIds.map((departmentId) => ({
+            departmentId,
+            userId: targetId.data,
+          })),
+        );
+      if (p.data.boardIds.length)
+        await tx.insert(boardMembers).values(
+          p.data.boardIds.map((boardId) => ({
+            boardId,
+            userId: targetId.data,
+            role: 'member' as const,
+          })),
+        );
+      const now = new Date();
+      await tx.execute(sql`
+        insert into task_events(id, task_id, actor_id, type, from_assignee_id)
+        select gen_random_uuid(), t.id, ${u.id}, 'assignee_changed', t.assignee_id
+        from tasks t
+        where t.assignee_id = ${targetId.data}
+          and not kanban_has_board_access(t.board_id, ${targetId.data})
+      `);
+      await tx.execute(sql`update tasks set assignee_id=null, updated_at=${now}
+        where assignee_id=${targetId.data} and not kanban_has_board_access(board_id, ${targetId.data})`);
+      await tx.execute(sql`update time_entries set stopped_at=${now}
+        where user_id=${targetId.data} and stopped_at is null and task_id in (
+          select id from tasks where not kanban_has_board_access(board_id, ${targetId.data})
+        )`);
+      return 'OK';
+    });
+    if (result === 'USER_NOT_FOUND')
+      return reply.code(404).send({ code: result });
+    if (result === 'ASSIGNMENT_TARGET_NOT_FOUND')
+      return reply.code(404).send({ code: result });
     return reply.code(204).send();
   });
   app.patch('/boards/:boardId', async (r, reply) => {
@@ -1431,18 +1838,53 @@ export async function buildApp() {
     if (!b.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const currentDepartment = (
+      await db
+        .select({ departmentId: boards.departmentId })
+        .from(boards)
+        .where(eq(boards.id, b.data))
+        .limit(1)
+    )[0]?.departmentId;
+    const targetDepartment = p.data.departmentId,
+      changingDepartment =
+        targetDepartment !== undefined &&
+        targetDepartment !== currentDepartment;
     if (
-      p.data.departmentId &&
+      targetDepartment &&
+      changingDepartment &&
       !(
         await db
           .select({ id: departments.id })
           .from(departments)
-          .where(eq(departments.id, p.data.departmentId))
+          .where(eq(departments.id, targetDepartment))
           .limit(1)
       )[0]
     )
       return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
-    await db.update(boards).set(p.data).where(eq(boards.id, b.data));
+    if (
+      targetDepartment &&
+      changingDepartment &&
+      !(await assignedToDepartment(targetDepartment, u))
+    )
+      return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
+    await db.transaction(async (tx) => {
+      await tx.update(boards).set(p.data).where(eq(boards.id, b.data));
+      if (changingDepartment) {
+        const now = new Date();
+        await tx.execute(sql`
+          insert into task_events(id, task_id, actor_id, type, from_assignee_id)
+          select gen_random_uuid(), t.id, ${u.id}, 'assignee_changed', t.assignee_id
+          from tasks t
+          where t.board_id = ${b.data} and t.assignee_id is not null
+            and not kanban_has_board_access(${b.data}, t.assignee_id)
+        `);
+        await tx.execute(sql`update tasks set assignee_id=null, updated_at=${now}
+          where board_id=${b.data} and assignee_id is not null and not kanban_has_board_access(${b.data}, assignee_id)`);
+        await tx.execute(sql`update time_entries set stopped_at=${now}
+          where stopped_at is null and task_id in (select id from tasks where board_id=${b.data})
+            and not kanban_has_board_access(${b.data}, user_id)`);
+      }
+    });
     return reply.code(204).send();
   });
   app.post('/boards/:boardId/archive', async (r, reply) => {
@@ -1516,50 +1958,65 @@ export async function buildApp() {
     if (!u) return;
     if (!b.success || !(await boardOr404(b.data, u.id, reply))) return;
     return {
-      members: await db
-        .select({
-          id: users.id,
-          email: users.email,
-          role: boardMembers.role,
-          accountRole: users.role,
-          archivedAt: users.archivedAt,
-        })
-        .from(boardMembers)
-        .innerJoin(users, eq(users.id, boardMembers.userId))
-        .where(eq(boardMembers.boardId, b.data)),
+      members: (
+        await pool.query(
+          `select u.id,u.email,'member'::text as role,u.role as "accountRole",u.archived_at as "archivedAt",
+          case when u.role in ('superadmin','admin') then 'global'
+               when bm.user_id is not null and dm.user_id is not null then 'both'
+               when bm.user_id is not null then 'board' else 'department' end as "accessSource"
+         from users u
+         left join board_members bm on bm.board_id=$1 and bm.user_id=u.id
+         left join department_members dm on dm.department_id=(select department_id from boards where id=$1) and dm.user_id=u.id
+         where u.archived_at is null and (u.role in ('superadmin','admin') or bm.user_id is not null or dm.user_id is not null)
+         order by u.email,u.id`,
+          [b.data],
+        )
+      ).rows,
     };
   });
   app.post('/boards/:boardId/members', async (r, reply) => {
     const u = await user(r, reply),
       b = id(r, 'boardId'),
-      p = z
-        .object({
-          userId: z.string().uuid(),
-          role: z.enum(['admin', 'member']).default('member'),
-        })
-        .strict()
-        .safeParse(r.body);
+      p = z.object({ userId: z.string().uuid() }).strict().safeParse(r.body);
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!b.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
-    if (
-      !(
-        await db
-          .select({ id: users.id })
-          .from(users)
-          .where(and(eq(users.id, p.data.userId), isNull(users.archivedAt)))
-          .limit(1)
-      )[0]
-    )
-      return reply.code(404).send({ code: 'USER_NOT_FOUND' });
     try {
-      await db
-        .insert(boardMembers)
-        .values({ boardId: b.data, userId: p.data.userId, role: p.data.role });
-    } catch {
-      return reply.code(409).send({ code: 'ALREADY_MEMBER' });
+      const added = await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-active-admins'))`,
+        );
+        const target = (
+          await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(
+              and(
+                eq(users.id, p.data.userId),
+                eq(users.role, 'user'),
+                isNull(users.archivedAt),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (!target) return false;
+        await tx
+          .insert(boardMembers)
+          .values({ boardId: b.data, userId: p.data.userId, role: 'member' });
+        return true;
+      });
+      if (!added) return reply.code(404).send({ code: 'USER_NOT_FOUND' });
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error &&
+        'code' in error &&
+        error.code === '23505'
+      )
+        return reply.code(409).send({ code: 'ALREADY_MEMBER' });
+      throw error;
     }
     return reply.code(201).send();
   });
@@ -1568,62 +2025,38 @@ export async function buildApp() {
       b = id(r, 'boardId'),
       target = id(r, 'userId');
     if (!u) return;
-    if (u.role !== 'admin') return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!b.success || !target.success || !(await member(b.data, u.id)))
       return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
     const removed = await db.transaction(async (tx) => {
       await tx.execute(
         sql`select id from boards where id = ${b.data} for update`,
       );
-      const membership = (
-        await tx
-          .select({ userId: boardMembers.userId })
-          .from(boardMembers)
-          .where(
-            and(
-              eq(boardMembers.boardId, b.data),
-              eq(boardMembers.userId, target.data),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (!membership) return 'NOT_FOUND';
-      const assigned = await tx
-        .select({ id: tasks.id })
-        .from(tasks)
-        .where(
-          and(eq(tasks.boardId, b.data), eq(tasks.assigneeId, target.data)),
-        );
-      const now = new Date();
-      for (const task of assigned) {
-        await tx
-          .update(tasks)
-          .set({ assigneeId: null, updatedAt: now })
-          .where(eq(tasks.id, task.id));
-        await tx.insert(taskEvents).values({
-          id: crypto.randomUUID(),
-          taskId: task.id,
-          actorId: u.id,
-          type: 'assignee_changed',
-          fromAssigneeId: target.data,
-          toAssigneeId: null,
-        });
-      }
-      await tx.execute(sql`
-        update time_entries
-        set stopped_at = ${now}
-        where user_id = ${target.data}
-          and stopped_at is null
-          and task_id in (select id from tasks where board_id = ${b.data})
-      `);
-      await tx
+      const membership = await tx
         .delete(boardMembers)
         .where(
           and(
             eq(boardMembers.boardId, b.data),
             eq(boardMembers.userId, target.data),
           ),
-        );
+        )
+        .returning({ userId: boardMembers.userId });
+      if (!membership[0]) return 'NOT_FOUND';
+      const now = new Date();
+      await tx.execute(sql`
+        insert into task_events(id, task_id, actor_id, type, from_assignee_id)
+        select gen_random_uuid(), t.id, ${u.id}, 'assignee_changed', t.assignee_id
+        from tasks t
+        where t.board_id = ${b.data} and t.assignee_id = ${target.data}
+          and not kanban_has_board_access(${b.data}, ${target.data})
+      `);
+      await tx.execute(sql`update tasks set assignee_id=null, updated_at=${now}
+        where board_id=${b.data} and assignee_id=${target.data}
+          and not kanban_has_board_access(${b.data}, ${target.data})`);
+      await tx.execute(sql`update time_entries set stopped_at=${now}
+        where user_id=${target.data} and stopped_at is null
+          and task_id in (select id from tasks where board_id=${b.data})
+          and not kanban_has_board_access(${b.data}, ${target.data})`);
       return 'OK';
     });
     if (removed === 'NOT_FOUND')
@@ -1866,7 +2299,7 @@ export async function buildApp() {
         .where(and(eq(timeEntries.id, e.data), eq(timeEntries.userId, u.id)))
         .limit(1)
     )[0];
-    if (!entry || !entry.stoppedAt)
+    if (!entry || !entry.stoppedAt || !(await owned(entry.taskId, u.id)))
       return reply.code(404).send({ code: 'TIME_ENTRY_NOT_FOUND' });
     await db.transaction(async (tx) => {
       await tx.insert(timeEntryCorrections).values({
@@ -1940,7 +2373,7 @@ export async function buildApp() {
     if (!a.success)
       return reply.code(404).send({ code: 'ATTACHMENT_NOT_FOUND' });
     const result = await pool.query(
-      'select a.file_name,a.mime_type,a.storage_path from attachments a join tasks t on t.id=a.task_id join board_members bm on bm.board_id=t.board_id where a.id=$1 and bm.user_id=$2',
+      'select a.file_name,a.mime_type,a.storage_path from attachments a join tasks t on t.id=a.task_id where a.id=$1 and kanban_has_board_access(t.board_id,$2)',
       [a.data, u.id],
     );
     if (!result.rows[0])
@@ -1961,7 +2394,7 @@ export async function buildApp() {
 }
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    await seedAdmin();
+    await seedSuperadmin();
     const app = await buildApp();
     await app.listen({ port: runtime.port, host: runtime.host });
     const close = async () => {

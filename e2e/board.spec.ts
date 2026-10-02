@@ -4,9 +4,21 @@ const email = process.env.E2E_EMAIL ?? 'admin@example.com';
 const password = process.env.E2E_PASSWORD ?? 'change-me-now';
 
 type Department = { id: string; name: string };
+type AccountRole = 'superadmin' | 'admin' | 'user';
+type AdminAccount = { id: string; email: string; role: AccountRole };
+type BoardSummary = { id: string; name: string; departmentId: string };
+
+const uniqueRun = `${Date.now()}-${process.pid}`;
+let uniqueSequence = 0;
 
 function uniqueName(prefix: string) {
-  return `${prefix} ${Date.now()} ${Math.random().toString(36).slice(2, 7)}`;
+  uniqueSequence += 1;
+  return `${prefix} ${uniqueRun}-${uniqueSequence}`;
+}
+
+function uniqueEmail(prefix: string) {
+  uniqueSequence += 1;
+  return `${prefix}.${uniqueRun}.${uniqueSequence}@example.test`;
 }
 
 async function signInAs(page: Page, login: string, secret: string) {
@@ -33,6 +45,50 @@ async function getDepartments(page: Page) {
   const body = (await response.json()) as { departments: Department[] };
   expect(body.departments.length).toBeGreaterThan(0);
   return body.departments;
+}
+
+async function createDepartmentForTest(page: Page, name = uniqueName('Отдел')) {
+  const response = await page.request.post('/api/departments', {
+    data: { name },
+  });
+  expect(response.status()).toBe(201);
+  const body = (await response.json()) as { department: Department };
+  return body.department;
+}
+
+async function createBoardApi(
+  page: Page,
+  departmentId: string,
+  name = uniqueName('Доска'),
+) {
+  const response = await page.request.post('/api/boards', {
+    data: { name, departmentId },
+  });
+  expect(response.status()).toBe(201);
+  const body = (await response.json()) as { board: BoardSummary };
+  return body.board;
+}
+
+async function createAccount(
+  page: Page,
+  email: string,
+  password: string,
+  role: AccountRole,
+) {
+  const response = await page.request.post('/api/admin/users', {
+    data: { email, password, role },
+  });
+  expect(response.status()).toBe(201);
+  const body = (await response.json()) as { user: AdminAccount };
+  return body.user;
+}
+
+async function signOut(page: Page, accountEmail: string) {
+  await page.getByRole('button', { name: accountEmail }).click();
+  await page.getByRole('menuitem', { name: 'Выйти' }).click();
+  await expect(
+    page.getByRole('img', { name: 'Логотип ТФОМС Югры' }),
+  ).toBeVisible();
 }
 
 async function openNavigation(page: Page) {
@@ -72,7 +128,10 @@ async function createBoardForTest(page: Page) {
 }
 
 async function chooseOption(page: Page, label: string, option: string) {
-  await page.getByRole('textbox', { name: label, exact: true }).click();
+  const control = page.getByRole('textbox', { name: label, exact: true });
+  await control.click();
+  if ((await control.getAttribute('readonly')) === null)
+    await control.fill(option);
   const item = page.getByRole('option', { name: option, exact: true });
   await expect(item).toBeVisible();
   await item.click();
@@ -188,6 +247,8 @@ async function expectReadableText(
 }
 
 test.describe('core board workflow', () => {
+  test.describe.configure({ mode: 'serial' });
+
   test('signs in through the Russian interface', async ({ page }) => {
     await signIn(page);
     await expect(page.getByTestId('user-email')).toHaveText(email);
@@ -524,15 +585,19 @@ test.describe('core board workflow', () => {
     await expect(page.getByText(boardName, { exact: true })).toHaveCount(0);
   });
 
-  test('administrator manages users, roles, passwords, and account status', async ({
+  test('bootstrap superadmin creates accounts and controls roles and passwords', async ({
     page,
+    request,
   }) => {
     await signIn(page);
-    const userEmail = `crud-${Date.now()}@example.test`;
     const currentResponse = await page.request.get('/api/auth/me');
+    expect(currentResponse.status()).toBe(200);
     const current = (await currentResponse.json()) as {
-      user: { id: string };
+      user: AdminAccount;
     };
+    expect(current.user.email).toBe(email);
+    expect(current.user.role).toBe('superadmin');
+
     const selfRoleChange = await page.request.patch(
       `/api/admin/users/${current.user.id}`,
       { data: { role: 'user' } },
@@ -544,31 +609,65 @@ test.describe('core board workflow', () => {
     );
     expect(selfArchive.status()).toBe(409);
     expect(await selfArchive.json()).toEqual({ code: 'SELF_ARCHIVE' });
+
+    const adminEmail = uniqueEmail('sa-admin');
+    const adminPassword = 'sa-admin-pass-123';
+    const userEmail = uniqueEmail('sa-user');
+    const userPassword = 'sa-user-pass-123';
+    await createAccount(page, adminEmail, adminPassword, 'admin');
+    const createdUser = await createAccount(
+      page,
+      userEmail,
+      userPassword,
+      'user',
+    );
+
     await page.getByRole('button', { name: email }).click();
     await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
-    await page.getByLabel('Email').fill(userEmail);
-    await page.getByLabel('Пароль для входа').fill('initial-pass-123');
-    await page.getByRole('button', { name: 'Создать пользователя' }).click();
+    await expect(page.getByText(adminEmail, { exact: true })).toBeVisible();
     await expect(page.getByText(userEmail, { exact: true })).toBeVisible();
 
-    await chooseOption(page, `Роль ${userEmail}`, 'Администратор');
+    await chooseOption(page, `Роль ${adminEmail}`, 'Пользователь');
     await expect(
-      page.getByRole('textbox', { name: `Роль ${userEmail}` }),
-    ).toHaveValue('Администратор');
-    await chooseOption(page, `Роль ${userEmail}`, 'Пользователь');
-    await expect(
-      page.getByRole('textbox', { name: `Роль ${userEmail}` }),
+      page.getByRole('textbox', { name: `Роль ${adminEmail}` }),
     ).toHaveValue('Пользователь');
+    await chooseOption(page, `Роль ${adminEmail}`, 'Администратор');
+    await expect(
+      page.getByRole('textbox', { name: `Роль ${adminEmail}` }),
+    ).toHaveValue('Администратор');
+    await chooseOption(page, `Роль ${userEmail}`, 'Администратор');
+    await chooseOption(page, `Роль ${userEmail}`, 'Пользователь');
 
+    const updatedPassword = 'sa-user-updated-123';
     await page
       .getByRole('button', { name: `Сменить пароль ${userEmail}` })
       .click();
     await page
       .getByLabel(`Новый пароль для ${userEmail}`)
-      .fill('updated-pass-123');
-    await page
-      .getByRole('button', { name: 'Сменить пароль', exact: true })
-      .click();
+      .fill(updatedPassword);
+    const [passwordResponse] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          response.request().method() === 'PATCH' &&
+          url.pathname === `/api/admin/users/${createdUser.id}`
+        );
+      }),
+      page.getByRole('button', { name: 'Сменить пароль', exact: true }).click(),
+    ]);
+    expect(passwordResponse.status()).toBe(204);
+    await expect(page.getByLabel(`Новый пароль для ${userEmail}`)).toHaveCount(
+      0,
+    );
+    const oldLogin = await request.post('/api/auth/sign-in', {
+      data: { email: userEmail, password: userPassword },
+    });
+    expect(oldLogin.status()).toBe(401);
+    const newLogin = await request.post('/api/auth/sign-in', {
+      data: { email: userEmail, password: updatedPassword },
+    });
+    expect(newLogin.status()).toBe(200);
+
     await page.getByRole('button', { name: `Отключить ${userEmail}` }).click();
     await page
       .getByRole('alertdialog')
@@ -581,6 +680,308 @@ test.describe('core board workflow', () => {
     await expect(archived).toBeVisible();
     await archived.getByRole('button', { name: 'Восстановить' }).click();
     await expect(archived).toHaveCount(0);
+  });
+
+  test('admin sees every board, manages user access, and cannot manage elevated accounts', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const meResponse = await page.request.get('/api/auth/me');
+    const me = (await meResponse.json()) as { user: AdminAccount };
+    expect(me.user.role).toBe('superadmin');
+
+    const adminEmail = uniqueEmail('global-admin');
+    const adminPassword = 'global-admin-pass-123';
+    const userEmail = uniqueEmail('global-user');
+    const userPassword = 'global-user-pass-123';
+    const admin = await createAccount(page, adminEmail, adminPassword, 'admin');
+    const ordinaryUser = await createAccount(
+      page,
+      userEmail,
+      userPassword,
+      'user',
+    );
+    const department = await createDepartmentForTest(
+      page,
+      uniqueName('Глобальный отдел'),
+    );
+    const board = await createBoardApi(
+      page,
+      department.id,
+      uniqueName('Глобальная доска'),
+    );
+
+    await signOut(page, email);
+    await signInAs(page, adminEmail, adminPassword);
+    const visibleBoards = await page.request.get('/api/boards');
+    expect(visibleBoards.status()).toBe(200);
+    const visibleBoardNames = (
+      (await visibleBoards.json()) as {
+        boards: BoardSummary[];
+      }
+    ).boards.map((item) => item.name);
+    expect(visibleBoardNames).toContain(board.name);
+    await selectBoard(page, board.name);
+
+    for (const role of ['admin', 'superadmin'] as const) {
+      const forbiddenCreation = await page.request.post('/api/admin/users', {
+        data: {
+          email: uniqueEmail(`admin-cannot-create-${role}`),
+          password: 'forbidden-create-pass-123',
+          role,
+        },
+      });
+      expect(forbiddenCreation.status()).toBe(403);
+      expect(await forbiddenCreation.json()).toEqual({ code: 'FORBIDDEN' });
+    }
+    const forbiddenRoleChange = await page.request.patch(
+      `/api/admin/users/${me.user.id}`,
+      { data: { role: 'user' } },
+    );
+    expect(forbiddenRoleChange.status()).toBe(403);
+    const forbiddenPasswordChange = await page.request.patch(
+      `/api/admin/users/${me.user.id}`,
+      { data: { password: 'admin-cannot-change-123' } },
+    );
+    expect(forbiddenPasswordChange.status()).toBe(403);
+    const forbiddenArchive = await page.request.delete(
+      `/api/admin/users/${me.user.id}`,
+    );
+    expect(forbiddenArchive.status()).toBe(403);
+    const forbiddenAccess = await page.request.put(
+      `/api/admin/users/${me.user.id}/access`,
+      { data: { departmentIds: [department.id], boardIds: [board.id] } },
+    );
+    expect(forbiddenAccess.status()).toBe(404);
+
+    const assigned = await page.request.put(
+      `/api/admin/users/${ordinaryUser.id}/access`,
+      { data: { departmentIds: [department.id], boardIds: [] } },
+    );
+    expect(assigned.status()).toBe(204);
+    const directory = await page.request.get('/api/admin/users');
+    expect(directory.status()).toBe(200);
+    const managedUsers = (
+      (await directory.json()) as {
+        users: Array<AdminAccount & { departmentIds: string[] }>;
+      }
+    ).users;
+    const managedOrdinaryUser = managedUsers.find(
+      (item) => item.id === ordinaryUser.id,
+    );
+    expect(managedOrdinaryUser?.role).toBe('user');
+    expect(managedOrdinaryUser?.departmentIds).toEqual([department.id]);
+    expect(managedUsers.some((item) => item.id === admin.id)).toBe(false);
+    expect(managedUsers.some((item) => item.id === me.user.id)).toBe(false);
+  });
+
+  test('ordinary-user access is a union, hides out-of-scope boards, and revokes each path safely', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const userEmail = uniqueEmail('scope-user');
+    const userPassword = 'scope-user-pass-123';
+    const ordinaryUser = await createAccount(
+      page,
+      userEmail,
+      userPassword,
+      'user',
+    );
+    const department = await createDepartmentForTest(
+      page,
+      uniqueName('Доступный отдел'),
+    );
+    const siblingDepartment = await createDepartmentForTest(
+      page,
+      uniqueName('Соседний отдел'),
+    );
+    const departmentBoard = await createBoardApi(
+      page,
+      department.id,
+      uniqueName('Доска отдела'),
+    );
+    const directBoard = await createBoardApi(
+      page,
+      siblingDepartment.id,
+      uniqueName('Прямая доска'),
+    );
+    const hiddenSiblingBoard = await createBoardApi(
+      page,
+      siblingDepartment.id,
+      uniqueName('Скрытая соседняя доска'),
+    );
+    const assigned = await page.request.put(
+      `/api/admin/users/${ordinaryUser.id}/access`,
+      { data: { departmentIds: [department.id], boardIds: [directBoard.id] } },
+    );
+    expect(assigned.status()).toBe(204);
+    const inheritedFutureBoard = await createBoardApi(
+      page,
+      department.id,
+      uniqueName('Будущая доска отдела'),
+    );
+
+    await signOut(page, email);
+    await signInAs(page, userEmail, userPassword);
+    const initialBoards = await page.request.get('/api/boards');
+    expect(initialBoards.status()).toBe(200);
+    const initialNames = (
+      (await initialBoards.json()) as {
+        boards: BoardSummary[];
+      }
+    ).boards.map((item) => item.name);
+    expect(initialNames).toEqual(
+      expect.arrayContaining([
+        departmentBoard.name,
+        inheritedFutureBoard.name,
+        directBoard.name,
+      ]),
+    );
+    expect(initialNames).not.toContain(hiddenSiblingBoard.name);
+    const renamedDirectBoard = uniqueName('Переименованная прямая доска');
+    const renameDirectBoard = await page.request.patch(
+      `/api/boards/${directBoard.id}`,
+      { data: { name: renamedDirectBoard } },
+    );
+    expect(renameDirectBoard.status()).toBe(204);
+    directBoard.name = renamedDirectBoard;
+    await selectBoard(page, inheritedFutureBoard.name);
+    const scopedNavigation = await openNavigation(page);
+    await expect(
+      scopedNavigation.getByRole('button', {
+        name: `Действия отдела ${siblingDepartment.name}`,
+      }),
+    ).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    const departmentBoardResponse = await page.request.get(
+      `/api/boards/${departmentBoard.id}`,
+    );
+    expect(departmentBoardResponse.status()).toBe(200);
+    const departmentBoardData = (await departmentBoardResponse.json()) as {
+      columns: Array<{ id: string }>;
+    };
+    const trackedTaskResponse = await page.request.post(
+      `/api/boards/${departmentBoard.id}/tasks`,
+      {
+        data: {
+          columnId: departmentBoardData.columns[0]!.id,
+          title: uniqueName('Задача перед отзывом доступа'),
+          assigneeId: ordinaryUser.id,
+        },
+      },
+    );
+    expect(trackedTaskResponse.status()).toBe(201);
+    const trackedTask = (await trackedTaskResponse.json()) as {
+      task: { id: string };
+    };
+    const timerResponse = await page.request.post(
+      `/api/tasks/${trackedTask.task.id}/timer/start`,
+    );
+    expect(timerResponse.status()).toBe(201);
+    const timer = (await timerResponse.json()) as {
+      entry: { id: string };
+    };
+
+    const hiddenDetail = await page.request.get(
+      `/api/boards/${hiddenSiblingBoard.id}`,
+    );
+    expect(hiddenDetail.status()).toBe(404);
+    expect(await hiddenDetail.json()).toEqual({ code: 'BOARD_NOT_FOUND' });
+    const hiddenNested = await page.request.get(
+      `/api/boards/${hiddenSiblingBoard.id}/members`,
+    );
+    expect(hiddenNested.status()).toBe(404);
+    expect(await hiddenNested.json()).toEqual({ code: 'BOARD_NOT_FOUND' });
+    const hiddenDepartmentMutation = await page.request.patch(
+      `/api/departments/${siblingDepartment.id}`,
+      { data: { name: uniqueName('Недоступное переименование') } },
+    );
+    expect(hiddenDepartmentMutation.status()).toBe(404);
+    const hiddenDepartmentMembers = await page.request.get(
+      `/api/departments/${siblingDepartment.id}/members`,
+    );
+    expect(hiddenDepartmentMembers.status()).toBe(403);
+
+    await signOut(page, userEmail);
+    await signIn(page);
+    const revokeDepartment = await page.request.put(
+      `/api/admin/users/${ordinaryUser.id}/access`,
+      { data: { departmentIds: [], boardIds: [directBoard.id] } },
+    );
+    expect(revokeDepartment.status()).toBe(204);
+    const timeEntriesResponse = await page.request.get(
+      `/api/boards/${departmentBoard.id}/time-entries`,
+    );
+    expect(timeEntriesResponse.status()).toBe(200);
+    const timeEntries = (await timeEntriesResponse.json()) as {
+      entries: Array<{ id: string; stoppedAt: string | null }>;
+    };
+    expect(
+      timeEntries.entries.find((entry) => entry.id === timer.entry.id)
+        ?.stoppedAt,
+    ).not.toBeNull();
+    const taskAfterRevokeResponse = await page.request.get(
+      `/api/boards/${departmentBoard.id}`,
+    );
+    const taskAfterRevoke = (await taskAfterRevokeResponse.json()) as {
+      columns: Array<{
+        tasks: Array<{ id: string; assigneeId: string | null }>;
+      }>;
+    };
+    expect(
+      taskAfterRevoke.columns
+        .flatMap((column) => column.tasks)
+        .find((task) => task.id === trackedTask.task.id)?.assigneeId,
+    ).toBeNull();
+    const historyResponse = await page.request.get(
+      `/api/boards/${departmentBoard.id}/tasks/${trackedTask.task.id}/history`,
+    );
+    const history = (await historyResponse.json()) as {
+      events: Array<{
+        type: string;
+        fromAssignee: { id: string } | null;
+        toAssignee: { id: string } | null;
+      }>;
+    };
+    expect(
+      history.events.some(
+        (event) =>
+          event.type === 'assignee_changed' &&
+          event.fromAssignee?.id === ordinaryUser.id &&
+          event.toAssignee === null,
+      ),
+    ).toBe(true);
+    await signOut(page, email);
+    await signInAs(page, userEmail, userPassword);
+    const afterDepartmentRevoke = await page.request.get('/api/boards');
+    expect(
+      (
+        (await afterDepartmentRevoke.json()) as { boards: BoardSummary[] }
+      ).boards.map((item) => item.name),
+    ).toEqual([directBoard.name]);
+    const directStillWorks = await page.request.get(
+      `/api/boards/${directBoard.id}`,
+    );
+    expect(directStillWorks.status()).toBe(200);
+
+    await signOut(page, userEmail);
+    await signIn(page);
+    const revokeDirect = await page.request.put(
+      `/api/admin/users/${ordinaryUser.id}/access`,
+      { data: { departmentIds: [], boardIds: [] } },
+    );
+    expect(revokeDirect.status()).toBe(204);
+    await signOut(page, email);
+    await signInAs(page, userEmail, userPassword);
+    const afterAllRevoke = await page.request.get('/api/boards');
+    expect(
+      ((await afterAllRevoke.json()) as { boards: BoardSummary[] }).boards,
+    ).toEqual([]);
+    const directRevoked = await page.request.get(
+      `/api/boards/${directBoard.id}`,
+    );
+    expect(directRevoked.status()).toBe(404);
   });
 
   test('regular user has domain CRUD but no account administration', async ({
@@ -607,7 +1008,7 @@ test.describe('core board workflow', () => {
     };
     const membership = await page.request.post(
       `/api/boards/${createdBoard.board.id}/members`,
-      { data: { userId: createdUser.user.id, role: 'member' } },
+      { data: { userId: createdUser.user.id } },
     );
     expect(membership.status()).toBe(201);
 

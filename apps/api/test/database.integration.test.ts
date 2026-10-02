@@ -40,7 +40,7 @@ database('PostgreSQL invariants', () => {
     );
     await client.query(
       `insert into users(id,email,password_hash,role)
-       values ($1,$2,'hash','admin'),($3,$4,'hash','user')`,
+       values ($1,$2,'hash','superadmin'),($3,$4,'hash','user')`,
       [userA, `${userA}@example.test`, userB, `${userB}@example.test`],
     );
     await client.query(`insert into departments(id,name) values ($1,$2)`, [
@@ -54,8 +54,8 @@ database('PostgreSQL invariants', () => {
     );
     await client.query(
       `insert into board_members(board_id,user_id,role)
-       values ($1,$2,'admin'),($3,$4,'admin')`,
-      [boardA, userA, boardB, userB],
+       values ($1,$2,'member')`,
+      [boardB, userB],
     );
     await client.query(
       `insert into columns(id,board_id,name,position)
@@ -78,10 +78,10 @@ database('PostgreSQL invariants', () => {
     const result = await client.query<{ count: string }>(
       'select count(*)::text as count from _migrations where checksum is not null',
     );
-    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(10);
+    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(13);
   });
 
-  it('uses only admin and user account roles and defaults to user', async () => {
+  it('uses superadmin, admin, and user account roles and defaults to user', async () => {
     const roles = await client.query<{ enumlabel: string }>(
       `select enumlabel
        from pg_enum
@@ -89,7 +89,11 @@ database('PostgreSQL invariants', () => {
        where pg_type.typname = 'user_role'
        order by enumsortorder`,
     );
-    expect(roles.rows.map((row) => row.enumlabel)).toEqual(['admin', 'user']);
+    expect(roles.rows.map((row) => row.enumlabel)).toEqual([
+      'superadmin',
+      'admin',
+      'user',
+    ]);
 
     const defaultUserId = crypto.randomUUID();
     const created = await client.query<{ role: string }>(
@@ -117,6 +121,55 @@ database('PostgreSQL invariants', () => {
         `insert into tasks(id,board_id,column_id,title,author_id,position)
          values ($1,$2,$3,'invalid',$4,1)`,
         [crypto.randomUUID(), boardA, columnA, userB],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('accepts department access and prevents scoped access for elevated accounts', async () => {
+    await client.query(
+      `insert into department_members(department_id,user_id) values ($1,$2)`,
+      [departmentA, userB],
+    );
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,position)
+       values ($1,$2,$3,'department access',$4,1)`,
+      [crypto.randomUUID(), boardA, columnA, userB],
+    );
+    await expect(
+      client.query(
+        `insert into board_members(board_id,user_id,role) values ($1,$2,'member')`,
+        [boardA, userA],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('allows cleanup of a running timer after access is revoked', async () => {
+    const taskId = crypto.randomUUID();
+    const entryId = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,position)
+       values ($1,$2,$3,'timer cleanup',$4,1)`,
+      [taskId, boardB, columnB, userB],
+    );
+    await client.query(
+      `insert into time_entries(id,task_id,user_id,started_at)
+       values ($1,$2,$3,now())`,
+      [entryId, taskId, userB],
+    );
+    await client.query(
+      `delete from board_members where board_id=$1 and user_id=$2`,
+      [boardB, userB],
+    );
+    await expect(
+      client.query(`update time_entries set stopped_at=now() where id=$1`, [
+        entryId,
+      ]),
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      client.query(
+        `insert into time_entries(id,task_id,user_id,started_at)
+         values ($1,$2,$3,now())`,
+        [crypto.randomUUID(), taskId, userB],
       ),
     ).rejects.toMatchObject({ code: '23514' });
   });

@@ -93,10 +93,15 @@ import '@mantine/core/styles.css';
 import '@mantine/dates/styles.css';
 import 'dayjs/locale/ru';
 import './styles.css';
-type User = { id: string; email: string; role: 'admin' | 'user' };
+type AccountRole = 'superadmin' | 'admin' | 'user';
+type User = { id: string; email: string; role: AccountRole };
 type AdminUser = User & {
   createdAt: string;
   archivedAt?: string | null;
+  departmentIds?: string[];
+  boardIds?: string[];
+  departmentCount?: number;
+  boardCount?: number;
 };
 type Board = {
   id: string;
@@ -104,13 +109,14 @@ type Board = {
   departmentId?: string | null;
   archivedAt?: string | null;
 };
-type Department = { id: string; name: string };
+type Department = { id: string; name: string; canManage?: boolean };
 type Person = {
   id: string;
   email: string;
   name?: string;
   role?: 'admin' | 'member';
-  accountRole?: 'admin' | 'user';
+  accountRole?: AccountRole;
+  accessSource?: 'board' | 'department' | 'both' | 'global';
   archivedAt?: string | null;
 };
 type Tag = { id: string; name: string; color?: string };
@@ -201,7 +207,8 @@ const ru: Record<string, string> = {
   EMAIL_TAKEN: 'Пользователь с таким email уже существует',
   ALREADY_MEMBER: 'Пользователь уже добавлен на эту доску',
   USER_NOT_FOUND: 'Пользователь не найден',
-  LAST_ADMIN: 'В системе должен остаться хотя бы один администратор',
+  ASSIGNMENT_TARGET_NOT_FOUND: 'Выбранный отдел или доска не найдены',
+  LAST_SUPERADMIN: 'В системе должен остаться хотя бы один суперадминистратор',
   SELF_ROLE_CHANGE: 'Нельзя изменить собственную роль',
   SELF_DELETE: 'Нельзя отключить свою учётную запись',
   SELF_ARCHIVE: 'Нельзя отключить свою учётную запись',
@@ -210,6 +217,17 @@ const ru: Record<string, string> = {
   BOARD_NOT_ARCHIVED: 'Сначала архивируйте доску',
   BOARD_NOT_EMPTY:
     'Доску с задачами нельзя удалить навсегда — оставьте её в архиве',
+};
+const roleLabel: Record<AccountRole, string> = {
+  user: 'Пользователь',
+  admin: 'Администратор',
+  superadmin: 'Суперадминистратор',
+};
+const accessSourceLabel: Record<NonNullable<Person['accessSource']>, string> = {
+  board: 'Доступ выдан к доске',
+  department: 'Доступ через отдел',
+  both: 'Доступ к доске и через отдел',
+  global: 'Глобальный доступ',
 };
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const form = init.body instanceof FormData,
@@ -485,7 +503,7 @@ function UserMenu({
         >
           Архив досок
         </Menu.Item>
-        {user.role === 'admin' && (
+        {user.role !== 'user' && (
           <>
             <Menu.Divider />
             <Menu.Label>Администрирование</Menu.Label>
@@ -511,20 +529,28 @@ function UserMenu({
 }
 function AdminUsersDrawer({
   currentUser,
+  departments,
+  boards,
   close,
 }: {
   currentUser: User;
+  departments: Department[];
+  boards: Board[];
   close: () => void;
 }) {
   const [status, setStatus] = useState<'active' | 'archived'>('active'),
     [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
-    [role, setRole] = useState<'admin' | 'user'>('user'),
+    [role, setRole] = useState<AccountRole>('user'),
     [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null),
     [newPassword, setNewPassword] = useState(''),
     [archiveTarget, setArchiveTarget] = useState<AdminUser | null>(null),
+    [accessTarget, setAccessTarget] = useState<AdminUser | null>(null),
+    [departmentIds, setDepartmentIds] = useState<string[]>([]),
+    [boardIds, setBoardIds] = useState<string[]>([]),
     [busy, setBusy] = useState(''),
     [error, setError] = useState('');
+  const isSuperadmin = currentUser.role === 'superadmin';
   const directory = useQuery<{ users: AdminUser[] }>({
     queryKey: ['admin-users', status],
     queryFn: () => api(`/admin/users?status=${status}`),
@@ -542,6 +568,24 @@ function AdminUsersDrawer({
     } finally {
       setBusy('');
     }
+  };
+  const openAccess = (item: AdminUser) => {
+    setAccessTarget(item);
+    setDepartmentIds(item.departmentIds ?? []);
+    setBoardIds(item.boardIds ?? []);
+    setPasswordTarget(null);
+    setArchiveTarget(null);
+  };
+  const closeAccess = () => {
+    setAccessTarget(null);
+    setDepartmentIds([]);
+    setBoardIds([]);
+  };
+  const summary = (item: AdminUser) => {
+    const departmentCount =
+      item.departmentCount ?? item.departmentIds?.length ?? 0;
+    const boardCount = item.boardCount ?? item.boardIds?.length ?? 0;
+    return `${departmentCount} отд. · ${boardCount} доск.`;
   };
   return (
     <MantineDrawer
@@ -565,7 +609,11 @@ function AdminUsersDrawer({
             const succeeded = await run('create', () =>
               api('/admin/users', {
                 method: 'POST',
-                body: JSON.stringify({ email, password, role }),
+                body: JSON.stringify({
+                  email,
+                  password,
+                  role: isSuperadmin ? role : 'user',
+                }),
               }),
             );
             if (succeeded) {
@@ -578,7 +626,7 @@ function AdminUsersDrawer({
           <div className="section-heading">
             <div>
               <h2>Новый пользователь</h2>
-              <p>Доступ к доскам выдаётся отдельно</p>
+              <p>Доступ к отделам и доскам выдаётся отдельно</p>
             </div>
           </div>
           <TextInput
@@ -596,16 +644,18 @@ function AdminUsersDrawer({
             onChange={(event) => setPassword(event.currentTarget.value)}
             required
           />
-          <Select
-            label="Роль"
-            value={role}
-            onChange={(value) => setRole(value as 'admin' | 'user')}
-            data={[
-              { value: 'user', label: 'Пользователь' },
-              { value: 'admin', label: 'Администратор' },
-            ]}
-            allowDeselect={false}
-          />
+          {isSuperadmin && (
+            <Select
+              label="Роль"
+              value={role}
+              onChange={(value) => setRole(value as AccountRole)}
+              data={Object.entries(roleLabel).map(([value, label]) => ({
+                value,
+                label,
+              }))}
+              allowDeselect={false}
+            />
+          )}
           <Button
             type="submit"
             leftSection={<Plus size={16} />}
@@ -642,7 +692,9 @@ function AdminUsersDrawer({
         )}
         <div className="admin-user-list">
           {directory.data?.users.map((item) => {
-            const ownAccount = item.id === currentUser.id;
+            const ownAccount = item.id === currentUser.id,
+              ordinaryUser = item.role === 'user',
+              canManageAccount = isSuperadmin || ordinaryUser;
             return (
               <section className="admin-user-row" key={item.id}>
                 <div className="admin-user-summary">
@@ -651,82 +703,251 @@ function AdminUsersDrawer({
                     <span>
                       {item.archivedAt
                         ? `Отключён ${date(item.archivedAt)}`
-                        : item.role === 'admin'
-                          ? 'Администратор'
-                          : 'Пользователь'}
+                        : roleLabel[item.role]}
+                      {ordinaryUser ? ` · ${summary(item)}` : ''}
                     </span>
                   </div>
                   {item.archivedAt ? (
-                    <Button
-                      variant="light"
-                      loading={busy === `restore:${item.id}`}
-                      onClick={() =>
-                        void run(`restore:${item.id}`, () =>
-                          api(`/admin/users/${item.id}/restore`, {
-                            method: 'POST',
-                          }),
-                        )
-                      }
-                    >
-                      Восстановить
-                    </Button>
-                  ) : (
-                    <Group gap="xs" wrap="nowrap">
-                      <Select
-                        aria-label={`Роль ${item.email}`}
-                        value={item.role}
-                        data={[
-                          {
-                            value: 'user',
-                            label: 'Пользователь',
-                          },
-                          {
-                            value: 'admin',
-                            label: 'Администратор',
-                          },
-                        ]}
-                        allowDeselect={false}
-                        disabled={ownAccount || Boolean(busy)}
-                        onChange={(value) =>
-                          value &&
-                          void run(`role:${item.id}`, () =>
-                            api(`/admin/users/${item.id}`, {
-                              method: 'PATCH',
-                              body: JSON.stringify({ role: value }),
+                    canManageAccount ? (
+                      <Button
+                        variant="light"
+                        loading={busy === `restore:${item.id}`}
+                        onClick={() =>
+                          void run(`restore:${item.id}`, () =>
+                            api(`/admin/users/${item.id}/restore`, {
+                              method: 'POST',
                             }),
                           )
                         }
-                      />
-                      <ActionIcon
-                        variant="subtle"
-                        color="gray"
-                        size="lg"
-                        aria-label={`Сменить пароль ${item.email}`}
-                        disabled={ownAccount}
-                        onClick={() => {
-                          setPasswordTarget(item);
-                          setNewPassword('');
-                          setArchiveTarget(null);
-                        }}
                       >
-                        <KeyRound size={17} />
-                      </ActionIcon>
-                      <ActionIcon
-                        variant="subtle"
-                        color="red"
-                        size="lg"
-                        aria-label={`Отключить ${item.email}`}
-                        disabled={ownAccount}
-                        onClick={() => {
-                          setArchiveTarget(item);
-                          setPasswordTarget(null);
-                        }}
-                      >
-                        <Trash2 size={17} />
-                      </ActionIcon>
+                        Восстановить
+                      </Button>
+                    ) : (
+                      <Badge variant="light" color="gray">
+                        Только для суперадминистратора
+                      </Badge>
+                    )
+                  ) : (
+                    <Group gap="xs" wrap="wrap" justify="flex-end">
+                      {isSuperadmin && (
+                        <Select
+                          className="admin-role-select"
+                          aria-label={`Роль ${item.email}`}
+                          value={item.role}
+                          data={Object.entries(roleLabel).map(
+                            ([value, label]) => ({ value, label }),
+                          )}
+                          allowDeselect={false}
+                          disabled={ownAccount || Boolean(busy)}
+                          onChange={(value) =>
+                            value &&
+                            void run(`role:${item.id}`, () =>
+                              api(`/admin/users/${item.id}`, {
+                                method: 'PATCH',
+                                body: JSON.stringify({ role: value }),
+                              }),
+                            )
+                          }
+                        />
+                      )}
+                      {ordinaryUser && (
+                        <Button
+                          variant="light"
+                          leftSection={<UsersRound size={16} />}
+                          onClick={() => openAccess(item)}
+                        >
+                          Доступ
+                        </Button>
+                      )}
+                      {canManageAccount && (
+                        <>
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            size="lg"
+                            aria-label={`Сменить пароль ${item.email}`}
+                            disabled={ownAccount}
+                            onClick={() => {
+                              setPasswordTarget(item);
+                              setNewPassword('');
+                              setArchiveTarget(null);
+                              closeAccess();
+                            }}
+                          >
+                            <KeyRound size={17} />
+                          </ActionIcon>
+                          <ActionIcon
+                            variant="subtle"
+                            color="red"
+                            size="lg"
+                            aria-label={`Отключить ${item.email}`}
+                            disabled={ownAccount}
+                            onClick={() => {
+                              setArchiveTarget(item);
+                              setPasswordTarget(null);
+                              closeAccess();
+                            }}
+                          >
+                            <Trash2 size={17} />
+                          </ActionIcon>
+                        </>
+                      )}
                     </Group>
                   )}
                 </div>
+                {!ordinaryUser && !isSuperadmin && !item.archivedAt && (
+                  <Text size="xs" c="dimmed">
+                    Управлять учётной записью может только суперадминистратор.
+                  </Text>
+                )}
+                {accessTarget?.id === item.id && (
+                  <form
+                    className="access-editor"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      const succeeded = await run(`access:${item.id}`, () =>
+                        api(`/admin/users/${item.id}/access`, {
+                          method: 'PUT',
+                          body: JSON.stringify({ departmentIds, boardIds }),
+                        }),
+                      );
+                      if (succeeded) closeAccess();
+                    }}
+                  >
+                    <div className="access-editor-heading">
+                      <div>
+                        <strong>Доступ для {item.email}</strong>
+                        <Text size="xs" c="dimmed">
+                          Выберите весь отдел или отдельные доски.
+                        </Text>
+                      </div>
+                      <Badge variant="light">
+                        {departmentIds.length} отд. · {boardIds.length} доск.
+                      </Badge>
+                    </div>
+                    <div className="access-groups">
+                      {departments.map((department) => {
+                        const departmentBoards = boards.filter(
+                            (board) => board.departmentId === department.id,
+                          ),
+                          wholeDepartment = departmentIds.includes(
+                            department.id,
+                          ),
+                          selectedBoards = departmentBoards.filter((board) =>
+                            boardIds.includes(board.id),
+                          ).length;
+                        return (
+                          <fieldset
+                            className="access-group"
+                            key={department.id}
+                          >
+                            <legend>{department.name}</legend>
+                            <Checkbox
+                              label="Все доски отдела"
+                              description="Включая новые доски"
+                              checked={wholeDepartment}
+                              indeterminate={
+                                !wholeDepartment && selectedBoards > 0
+                              }
+                              onChange={(event) => {
+                                const checked = event.currentTarget.checked;
+                                setDepartmentIds((current) =>
+                                  checked
+                                    ? [...new Set([...current, department.id])]
+                                    : current.filter(
+                                        (id) => id !== department.id,
+                                      ),
+                                );
+                                if (checked)
+                                  setBoardIds((current) =>
+                                    current.filter(
+                                      (id) =>
+                                        !departmentBoards.some(
+                                          (board) => board.id === id,
+                                        ),
+                                    ),
+                                  );
+                              }}
+                            />
+                            {departmentBoards.length === 0 ? (
+                              <Text size="xs" c="dimmed">
+                                В отделе пока нет досок
+                              </Text>
+                            ) : (
+                              <div className="access-board-list">
+                                {departmentBoards.map((board) => (
+                                  <Checkbox
+                                    key={board.id}
+                                    label={`${board.name}${
+                                      board.archivedAt ? ' (архив)' : ''
+                                    }`}
+                                    checked={
+                                      wholeDepartment ||
+                                      boardIds.includes(board.id)
+                                    }
+                                    disabled={wholeDepartment}
+                                    onChange={(event) =>
+                                      setBoardIds((current) =>
+                                        event.currentTarget.checked
+                                          ? [...new Set([...current, board.id])]
+                                          : current.filter(
+                                              (id) => id !== board.id,
+                                            ),
+                                      )
+                                    }
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </fieldset>
+                        );
+                      })}
+                      {boards.some((board) => !board.departmentId) && (
+                        <fieldset className="access-group">
+                          <legend>Без отдела</legend>
+                          <div className="access-board-list">
+                            {boards
+                              .filter((board) => !board.departmentId)
+                              .map((board) => (
+                                <Checkbox
+                                  key={board.id}
+                                  label={`${board.name}${
+                                    board.archivedAt ? ' (архив)' : ''
+                                  }`}
+                                  checked={boardIds.includes(board.id)}
+                                  onChange={(event) =>
+                                    setBoardIds((current) =>
+                                      event.currentTarget.checked
+                                        ? [...new Set([...current, board.id])]
+                                        : current.filter(
+                                            (id) => id !== board.id,
+                                          ),
+                                    )
+                                  }
+                                />
+                              ))}
+                          </div>
+                        </fieldset>
+                      )}
+                    </div>
+                    <Group justify="flex-end">
+                      <Button
+                        type="button"
+                        variant="subtle"
+                        color="gray"
+                        onClick={closeAccess}
+                      >
+                        Отмена
+                      </Button>
+                      <Button
+                        type="submit"
+                        loading={busy === `access:${item.id}`}
+                      >
+                        Сохранить доступ
+                      </Button>
+                    </Group>
+                  </form>
+                )}
                 {passwordTarget?.id === item.id && (
                   <form
                     className="user-action-panel"
@@ -2113,7 +2334,7 @@ function Settings({
     directory = useQuery<{ users: AdminUser[] }>({
       queryKey: ['admin-users', 'active'],
       queryFn: () => api('/admin/users?status=active'),
-      enabled: currentUser.role === 'admin',
+      enabled: currentUser.role !== 'user',
     }),
     [boardName, setBoardName] = useState(data.board.name),
     [boardDepartment, setBoardDepartment] = useState(
@@ -2164,7 +2385,9 @@ function Settings({
           <Tabs.Tab value="general">Общие</Tabs.Tab>
           <Tabs.Tab value="columns">Колонки</Tabs.Tab>
           <Tabs.Tab value="taxonomy">Темы и метки</Tabs.Tab>
-          <Tabs.Tab value="members">Доступ</Tabs.Tab>
+          {currentUser.role !== 'user' && (
+            <Tabs.Tab value="members">Доступ</Tabs.Tab>
+          )}
         </Tabs.List>
 
         <Tabs.Panel value="general" pt="lg">
@@ -2208,13 +2431,25 @@ function Settings({
                 label="Отдел"
                 value={boardDepartment || null}
                 onChange={(value) => setBoardDepartment(value ?? '')}
-                data={departments.map((department) => ({
-                  value: department.id,
-                  label: department.name,
-                }))}
+                data={departments
+                  .filter(
+                    (department) =>
+                      department.id === data.board.departmentId ||
+                      department.canManage !== false,
+                  )
+                  .map((department) => ({
+                    value: department.id,
+                    label: department.name,
+                  }))}
                 required
               />
-              <Button type="submit" disabled={!boardDepartment}>
+              <Button
+                type="submit"
+                disabled={
+                  !boardDepartment ||
+                  boardDepartment === data.board.departmentId
+                }
+              >
                 Сменить отдел
               </Button>
             </form>
@@ -2558,44 +2793,56 @@ function Settings({
           </div>
         </Tabs.Panel>
 
-        <Tabs.Panel value="members" pt="lg">
-          <Stack gap="md">
-            <div className="section-heading">
-              <div>
-                <h2>Доступ к доске</h2>
-                <p>Участники видят задачи и могут работать с доской</p>
-              </div>
-            </div>
-            {(data.members ?? []).map((member) => (
-              <div className="member-row" key={member.id}>
+        {currentUser.role !== 'user' && (
+          <Tabs.Panel value="members" pt="lg">
+            <Stack gap="md">
+              <div className="section-heading">
                 <div>
-                  <strong>{member.name ?? member.email}</strong>
-                  <span>
-                    {member.accountRole === 'admin'
-                      ? 'Администратор'
-                      : 'Пользователь'}
-                    {member.archivedAt ? ' · отключён' : ''}
-                  </span>
+                  <h2>Доступ к доске</h2>
+                  <p>Участники видят задачи и могут работать с доской</p>
                 </div>
-                {currentUser.role === 'admin' &&
-                  member.id !== currentUser.id && (
-                    <Button
-                      variant="subtle"
-                      color="red"
-                      onClick={() =>
-                        void run(() =>
-                          api(`/boards/${data.board.id}/members/${member.id}`, {
-                            method: 'DELETE',
-                          }),
-                        )
-                      }
-                    >
-                      Убрать доступ
-                    </Button>
-                  )}
               </div>
-            ))}
-            {currentUser.role === 'admin' ? (
+              {(data.members ?? []).map((member) => {
+                const source = member.accessSource ?? 'board';
+                const canRemoveDirect = source === 'board' || source === 'both';
+                return (
+                  <div className="member-row" key={member.id}>
+                    <div>
+                      <strong>{member.name ?? member.email}</strong>
+                      <span>
+                        {member.accountRole
+                          ? roleLabel[member.accountRole]
+                          : 'Пользователь'}
+                        {' · '}
+                        {accessSourceLabel[source]}
+                        {member.archivedAt ? ' · отключён' : ''}
+                      </span>
+                    </div>
+                    {canRemoveDirect ? (
+                      <Button
+                        variant="subtle"
+                        color="red"
+                        onClick={() =>
+                          void run(() =>
+                            api(
+                              `/boards/${data.board.id}/members/${member.id}`,
+                              {
+                                method: 'DELETE',
+                              },
+                            ),
+                          )
+                        }
+                      >
+                        Убрать доступ
+                      </Button>
+                    ) : (
+                      <Badge variant="light" color="gray">
+                        Без прямого доступа
+                      </Badge>
+                    )}
+                  </div>
+                );
+              })}
               <form
                 className="settings-form member-create-form"
                 onSubmit={async (event) => {
@@ -2606,7 +2853,6 @@ function Settings({
                       method: 'POST',
                       body: JSON.stringify({
                         userId: memberUserId,
-                        role: 'member',
                       }),
                     }),
                   );
@@ -2622,6 +2868,7 @@ function Settings({
                   data={(directory.data?.users ?? [])
                     .filter(
                       (candidate) =>
+                        candidate.role === 'user' &&
                         !(data.members ?? []).some(
                           (member) => member.id === candidate.id,
                         ),
@@ -2642,13 +2889,9 @@ function Settings({
                   </Text>
                 )}
               </form>
-            ) : (
-              <Text size="sm" c="dimmed">
-                Управлять доступом может администратор.
-              </Text>
-            )}
-          </Stack>
-        </Tabs.Panel>
+            </Stack>
+          </Tabs.Panel>
+        )}
       </Tabs>
       {error && <p role="alert">{error}</p>}
     </MantineDrawer>
@@ -2955,7 +3198,12 @@ function CreateBoardPopover({
     </Popover>
   );
 }
-type BoardGroup = { id: string; name: string; boards: Board[] };
+type BoardGroup = {
+  id: string;
+  name: string;
+  canManage?: boolean;
+  boards: Board[];
+};
 function SidebarContent({
   groups,
   departments,
@@ -3047,9 +3295,13 @@ function SidebarContent({
                     <strong>{group.name}</strong>
                     <span>{group.boards.length}</span>
                   </button>
-                  {group.id !== 'ungrouped' && (
+                  {group.id !== 'ungrouped' && group.canManage !== false && (
                     <RenameDepartmentPopover
-                      department={{ id: group.id, name: group.name }}
+                      department={{
+                        id: group.id,
+                        name: group.name,
+                        canManage: group.canManage,
+                      }}
                       afterUpdate={departmentsChanged}
                       afterDelete={departmentDeleted}
                     />
@@ -3088,7 +3340,9 @@ function SidebarContent({
       )}
       <div className="sidebar-actions">
         <CreateBoardPopover
-          departments={departments}
+          departments={departments.filter(
+            (department) => department.canManage !== false,
+          )}
           initialDepartmentId={selected?.departmentId}
           afterCreate={boardCreated}
         />
@@ -3782,9 +4036,14 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
           destroy={deleteBoard}
         />
       )}
-      {usersOpen && user.role === 'admin' && (
+      {usersOpen && user.role !== 'user' && (
         <AdminUsersDrawer
           currentUser={user}
+          departments={departments.data?.departments ?? []}
+          boards={[
+            ...(boards.data?.boards ?? []),
+            ...(archivedBoards.data?.boards ?? []),
+          ]}
           close={() => setUsersOpen(false)}
         />
       )}
