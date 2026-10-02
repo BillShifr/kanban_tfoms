@@ -1201,7 +1201,7 @@ test.describe('core board workflow', () => {
     page,
   }) => {
     await signIn(page);
-    await createBoardForTest(page);
+    const boardName = await createBoardForTest(page);
     const title = uniqueName('Задача со свободным исполнителем');
     const externalAssignee = uniqueName('Внешний исполнитель');
     await addTask(page, title);
@@ -1222,11 +1222,27 @@ test.describe('core board workflow', () => {
     await expect(
       page.getByRole('button', { name: 'Фильтры · 1', exact: true }),
     ).toBeVisible();
+    const filterTrigger = page.getByRole('button', {
+      name: 'Фильтры · 1',
+      exact: true,
+    });
+    const filterTitle = page.getByText('Фильтры задач', { exact: true });
+    if (await filterTitle.isVisible()) {
+      await page.getByRole('heading', { name: boardName, exact: true }).click();
+      await expect(filterTitle).toBeHidden();
+    }
+    await filterTrigger.click();
+    await expect(filterTitle).toBeVisible();
     await page
       .getByText('Фильтры задач', { exact: true })
       .locator('..')
       .getByRole('button', { name: 'Сбросить', exact: true })
       .click();
+    await expect(
+      page.getByRole('button', { name: 'Фильтры', exact: true }),
+    ).toBeVisible();
+    await page.getByRole('heading', { name: boardName, exact: true }).click();
+    await expect(filterTitle).toBeHidden();
 
     await card.getByRole('button').first().click();
     await page.getByRole('tab', { name: 'История' }).click();
