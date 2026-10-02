@@ -11,16 +11,15 @@ remote_name=${DEPLOY_REMOTE:-origin}
 deploy_branch=${DEPLOY_BRANCH:-main}
 github_repository=${GITHUB_REPOSITORY:-BillShifr/kanban_tfoms}
 ci_workflow=${CI_WORKFLOW_NAME:-CI}
-deploy_timeout=${DEPLOY_TIMEOUT_SECONDS:-1200}
 state_dir=${AUTODEPLOY_STATE_DIR:-"$HOME/.local/state/minimal-kanban"}
-lock_file="$state_dir/autodeploy.lock"
+lock_file="$state_dir/lifecycle.lock"
 
 fail() {
   echo "autodeploy: $*" >&2
   exit 1
 }
 
-for command_name in curl flock git python3 sed timeout; do
+for command_name in curl flock git python3 sed; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command is missing: $command_name"
 done
 [ -r "$env_file" ] || fail "environment file is not readable: $env_file"
@@ -48,7 +47,17 @@ git fetch --quiet --no-tags "$remote_name" "$deploy_branch"
 current_head=$(git rev-parse HEAD)
 target_head=$(git rev-parse "$remote_name/$deploy_branch")
 
-if [ "$current_head" = "$target_head" ]; then
+image_tag_count=$(grep -c '^IMAGE_TAG=' "$env_file" || true)
+[ "$image_tag_count" -eq 1 ] || fail "environment file must contain exactly one IMAGE_TAG"
+previous_image_tag=$(sed -n 's/^IMAGE_TAG=//p' "$env_file")
+case "$previous_image_tag" in
+  '' | *[!A-Za-z0-9_.-]*) fail "current IMAGE_TAG contains unsafe characters" ;;
+esac
+case "$target_head" in
+  *[!0-9a-f]*) fail "target commit is not a hexadecimal SHA" ;;
+esac
+
+if [ "$current_head" = "$target_head" ] && [ "$previous_image_tag" = "$target_head" ]; then
   echo "autodeploy: already current at $current_head"
   exit 0
 fi
@@ -112,16 +121,6 @@ case "$ci_status" in
   *) fail "could not validate GitHub CI status for $target_head" ;;
 esac
 
-image_tag_count=$(grep -c '^IMAGE_TAG=' "$env_file" || true)
-[ "$image_tag_count" -eq 1 ] || fail "environment file must contain exactly one IMAGE_TAG"
-previous_image_tag=$(sed -n 's/^IMAGE_TAG=//p' "$env_file")
-case "$previous_image_tag" in
-  '' | *[!A-Za-z0-9_.-]*) fail "current IMAGE_TAG contains unsafe characters" ;;
-esac
-case "$target_head" in
-  *[!0-9a-f]*) fail "target commit is not a hexadecimal SHA" ;;
-esac
-
 set_image_tag() {
   tag=$1
   sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$tag/" "$env_file"
@@ -131,14 +130,16 @@ set_image_tag() {
 
 echo "autodeploy: creating a consistent backup before $target_head"
 ENV_FILE="$env_file" PODMAN="$podman" COMPOSE_FILE="$compose_file" \
+  LIFECYCLE_LOCK_HELD=true \
   "$project_root/deploy/backup.sh"
 
 git merge --ff-only "$remote_name/$deploy_branch"
 set_image_tag "$target_head"
 
 deploy_ok=false
-if timeout "$deploy_timeout" "$podman" compose --env-file "$env_file" \
-  -f "$compose_file" up -d --build; then
+if ENV_FILE="$env_file" PODMAN="$podman" COMPOSE_FILE="$compose_file" \
+  BUILD_IMAGES=true LIFECYCLE_LOCK_HELD=true \
+  "$project_root/deploy/start-stack.sh"; then
   if ENV_FILE="$env_file" PODMAN="$podman" COMPOSE_FILE="$compose_file" \
     VERIFY_URL="$verify_url" "$project_root/deploy/verify.sh"; then
     deploy_ok=true
@@ -153,8 +154,9 @@ fi
 echo "autodeploy: deployment failed; restoring code and images for $current_head" >&2
 git reset --hard "$current_head"
 set_image_tag "$previous_image_tag"
-timeout "$deploy_timeout" "$podman" compose --env-file "$env_file" \
-  -f "$compose_file" up -d
+ENV_FILE="$env_file" PODMAN="$podman" COMPOSE_FILE="$compose_file" \
+  BUILD_IMAGES=false LIFECYCLE_LOCK_HELD=true \
+  "$project_root/deploy/start-stack.sh"
 ENV_FILE="$env_file" PODMAN="$podman" COMPOSE_FILE="$compose_file" \
   VERIFY_URL="$verify_url" "$project_root/deploy/verify.sh"
 fail "deployment of $target_head failed and was rolled back"

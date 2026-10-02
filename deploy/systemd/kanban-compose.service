@@ -7,11 +7,14 @@ After=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=%h/apps/minimal-kanban
+Environment=ENV_FILE=%h/.config/kanban/api.env
+Environment=BUILD_IMAGES=false
+Environment=PODMAN_COMPOSE_PROVIDER=/usr/bin/podman-compose
 ExecStartPre=/bin/sh -c '/usr/bin/podman compose --env-file %h/.config/kanban/api.env -f compose.prod.yml config >/dev/null'
-ExecStart=/usr/bin/podman compose --env-file %h/.config/kanban/api.env -f compose.prod.yml up -d
-ExecStop=/usr/bin/podman compose --env-file %h/.config/kanban/api.env -f compose.prod.yml down
-TimeoutStartSec=180
-TimeoutStopSec=60
+ExecStart=%h/apps/minimal-kanban/deploy/start-stack.sh
+ExecStop=%h/apps/minimal-kanban/deploy/stop-stack.sh
+TimeoutStartSec=1800
+TimeoutStopSec=180
 
 [Install]
 WantedBy=default.target
