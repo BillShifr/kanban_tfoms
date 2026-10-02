@@ -13,6 +13,26 @@ set +a
 
 PODMAN=${PODMAN:-podman}
 COMPOSE_FILE=${COMPOSE_FILE:-compose.prod.yml}
+state_dir=${AUTODEPLOY_STATE_DIR:-"$HOME/.local/state/minimal-kanban"}
+lock_file="$state_dir/lifecycle.lock"
+lifecycle_lock_held=${LIFECYCLE_LOCK_HELD:-false}
+
+case "$lifecycle_lock_held" in true | false) ;; *)
+  echo "LIFECYCLE_LOCK_HELD must be true or false" >&2
+  exit 1
+esac
+if [ "$lifecycle_lock_held" = false ]; then
+  command -v flock >/dev/null 2>&1 || {
+    echo "required command is missing: flock" >&2
+    exit 1
+  }
+  mkdir -p "$state_dir"
+  exec 9>"$lock_file"
+  flock -w 60 9 || {
+    echo "another lifecycle operation is still running" >&2
+    exit 1
+  }
+fi
 
 require_safe_absolute_dir() {
   case "$1" in /*) ;; *) echo "path must be absolute: $1" >&2; exit 1 ;; esac
@@ -32,7 +52,8 @@ api_stopped=false
 cleanup_running=false
 start_api() {
   if [ "$api_stopped" = true ]; then
-    "$PODMAN" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d api
+    "$PODMAN" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
+      up -d --no-deps api
     api_stopped=false
   fi
 }

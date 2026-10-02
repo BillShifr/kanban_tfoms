@@ -1,11 +1,13 @@
 [Unit]
 Description=Minimal Kanban automatic deployment
 Wants=network-online.target
-After=network-online.target
+Requires=kanban-compose.service
+After=network-online.target kanban-compose.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/apps/minimal-kanban
 Environment=VERIFY_URL=http://127.0.0.1:8080
+Environment=PODMAN_COMPOSE_PROVIDER=/usr/bin/podman-compose
 ExecStart=%h/apps/minimal-kanban/deploy/auto-deploy.sh
-TimeoutStartSec=1500
+TimeoutStartSec=7200

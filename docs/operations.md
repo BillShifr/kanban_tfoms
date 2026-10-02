@@ -105,10 +105,11 @@ PUBLIC_URL=http://kanban.tfoms
 
 ```sh
 cd "$HOME/apps/minimal-kanban"
+export PODMAN_COMPOSE_PROVIDER=/usr/bin/podman-compose
 podman compose --env-file "$HOME/.config/kanban/api.env" \
   -f compose.prod.yml config >/dev/null
-podman compose --env-file "$HOME/.config/kanban/api.env" \
-  -f compose.prod.yml up -d --build
+ENV_FILE="$HOME/.config/kanban/api.env" PODMAN=podman \
+  BUILD_IMAGES=true deploy/start-stack.sh
 ENV_FILE="$HOME/.config/kanban/api.env" PODMAN=podman deploy/verify.sh
 ```
 
@@ -116,8 +117,8 @@ ENV_FILE="$HOME/.config/kanban/api.env" PODMAN=podman deploy/verify.sh
 `INITIAL_ADMIN_EMAIL` и `INITIAL_ADMIN_PASSWORD`, затем примените конфигурацию:
 
 ```sh
-podman compose --env-file "$HOME/.config/kanban/api.env" \
-  -f compose.prod.yml up -d api
+ENV_FILE="$HOME/.config/kanban/api.env" PODMAN=podman \
+  BUILD_IMAGES=false deploy/start-stack.sh
 ```
 
 ## Запуск после перезагрузки
@@ -159,17 +160,15 @@ cd "$HOME/apps/minimal-kanban"
 git pull --ff-only origin main
 loginctl show-user "$USER" -p Linger
 chmod +x deploy/*.sh
-mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/state/minimal-kanban"
-cp deploy/systemd/kanban-autodeploy.service \
-  "$HOME/.config/systemd/user/kanban-autodeploy.service"
-cp deploy/systemd/kanban-autodeploy.timer \
-  "$HOME/.config/systemd/user/kanban-autodeploy.timer"
-systemctl --user daemon-reload
-systemctl --user enable --now kanban-autodeploy.timer
-systemctl --user start kanban-autodeploy.service
-systemctl --user status kanban-autodeploy.timer --no-pager
+deploy/install-autodeploy.sh
 journalctl --user -u kanban-autodeploy.service -n 100 --no-pager
 ```
+
+Установщик идемпотентен: он проверяет чистый checkout ветки `main`, копирует
+все три user-unit, включает основной Compose-сервис и таймер, запускает
+однократную проверку обновления и убеждается, что сервисы активны. Для
+предсказуемого поведения на этом сервере systemd явно использует установленный
+`/usr/bin/podman-compose` как Compose provider.
 
 Если `loginctl` показывает `Linger=no`, DevOps должен один раз выполнить
 `sudo loginctl enable-linger vladislav`. Без linger пользовательский таймер может
@@ -181,7 +180,9 @@ journalctl --user -u kanban-autodeploy.service -n 100 --no-pager
 2. Разрешает только fast-forward ветки `main` из ожидаемого репозитория.
 3. Проверяет успешный GitHub Actions workflow `CI` для точного commit SHA.
 4. Создаёт согласованный backup БД и вложений.
-5. Обновляет код и `IMAGE_TAG`, собирает и запускает контейнеры.
+5. Обновляет код и `IMAGE_TAG`, отдельно собирает образы и запускает контейнеры
+   строго `db → api → web`, ожидая `healthy` после каждого слоя. Единый
+   lifecycle-lock исключает параллельный запуск systemd и автодеплоя.
 6. Проверяет web, API healthcheck и таблицу миграций через loopback URL.
 7. При ошибке возвращает предыдущий код и предыдущие образы. Backup остаётся
    для ручного восстановления данных; автоматический destructive restore БД
@@ -209,11 +210,15 @@ systemctl --user disable --now kanban-autodeploy.timer
 4. Запишите значение из `RELEASE` в `IMAGE_TAG` внешнего env-файла.
 5. Остановите user unit, переместите текущий каталог релиза в датированный
    rollback-каталог и атомарно поставьте новый каталог на его место.
-6. Запустите `podman compose ... up -d --build`, затем `deploy/verify.sh`.
+6. Запустите `BUILD_IMAGES=true deploy/start-stack.sh`, затем
+   `deploy/verify.sh`.
 
 Стабильное имя Compose-проекта в `compose.prod.yml` сохраняет тот же volume БД
 при замене каталога релиза. Не запускайте параллельные обновления: API применяет
 append-only миграции перед стартом и рассчитан на один production-экземпляр.
+Каждая миграция для автоматического обновления обязана быть обратно совместима
+с предыдущей версией приложения: автоматический rollback возвращает код и
+образы, но намеренно не выполняет разрушительный restore рабочей БД.
 
 ## Backup и restore
 
@@ -223,6 +228,7 @@ append-only миграции перед стартом и рассчитан н�
 
 ```sh
 cd "$HOME/apps/minimal-kanban"
+PODMAN_COMPOSE_PROVIDER=/usr/bin/podman-compose \
 ENV_FILE="$HOME/.config/kanban/api.env" PODMAN=podman deploy/backup.sh
 ```
 
@@ -236,7 +242,8 @@ Restore перезаписывает текущую БД и меняет кат�
 cd "$HOME/apps/minimal-kanban"
 ENV_FILE="$HOME/.config/kanban/api.env" \
 BACKUP_SET="$HOME/backups/minimal-kanban/kanban-YYYYMMDDTHHMMSSZ" \
-CONFIRM_RESTORE=YES PODMAN=podman deploy/restore.sh
+CONFIRM_RESTORE=YES PODMAN=podman \
+PODMAN_COMPOSE_PROVIDER=/usr/bin/podman-compose deploy/restore.sh
 ```
 
 Перед production restore сделайте свежий backup. При откате неудачной миграции
