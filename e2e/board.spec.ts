@@ -615,7 +615,12 @@ test.describe('core board workflow', () => {
     const userEmail = uniqueEmail('sa-user');
     const userPassword = 'sa-user-pass-123';
     await createAccount(page, adminEmail, adminPassword, 'admin');
-    await createAccount(page, userEmail, userPassword, 'user');
+    const createdUser = await createAccount(
+      page,
+      userEmail,
+      userPassword,
+      'user',
+    );
 
     await page.getByRole('button', { name: email }).click();
     await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
@@ -640,9 +645,20 @@ test.describe('core board workflow', () => {
     await page
       .getByLabel(`Новый пароль для ${userEmail}`)
       .fill(updatedPassword);
-    await page
-      .getByRole('button', { name: 'Сменить пароль', exact: true })
-      .click();
+    const [passwordResponse] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          response.request().method() === 'PATCH' &&
+          url.pathname === `/api/admin/users/${createdUser.id}`
+        );
+      }),
+      page.getByRole('button', { name: 'Сменить пароль', exact: true }).click(),
+    ]);
+    expect(passwordResponse.status()).toBe(204);
+    await expect(page.getByLabel(`Новый пароль для ${userEmail}`)).toHaveCount(
+      0,
+    );
     const oldLogin = await request.post('/api/auth/sign-in', {
       data: { email: userEmail, password: userPassword },
     });
