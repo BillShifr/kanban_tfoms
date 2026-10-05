@@ -13,6 +13,7 @@ poll_interval=${HEALTH_POLL_INTERVAL_SECONDS:-2}
 state_dir=${AUTODEPLOY_STATE_DIR:-"$HOME/.local/state/minimal-kanban"}
 lock_file="$state_dir/lifecycle.lock"
 lifecycle_lock_held=${LIFECYCLE_LOCK_HELD:-false}
+compose_project=${COMPOSE_PROJECT_NAME:-minimal-kanban}
 
 fail() {
   echo "start-stack: $*" >&2
@@ -26,6 +27,7 @@ done
 [ -r "$env_file" ] || fail "environment file is not readable: $env_file"
 case "$build_images" in true | false) ;; *) fail "BUILD_IMAGES must be true or false" ;; esac
 case "$lifecycle_lock_held" in true | false) ;; *) fail "LIFECYCLE_LOCK_HELD must be true or false" ;; esac
+case "$compose_project" in '' | *[!A-Za-z0-9_-]*) fail "COMPOSE_PROJECT_NAME contains unsafe characters" ;; esac
 
 if [ "$lifecycle_lock_held" = false ]; then
   mkdir -p "$state_dir"
@@ -44,11 +46,11 @@ compose() {
 
 service_container_id() {
   service=$1
-  container_ids=$(compose ps -q "$service") || \
-    fail "could not resolve the $service container"
-  set -- $container_ids
-  [ "$#" -eq 1 ] || fail "expected one $service container, found $#"
-  printf '%s\n' "$1"
+  container_name="${compose_project}_${service}_1"
+  container_id=$(timeout "$inspect_timeout" "$podman" container inspect \
+    --format '{{.Id}}' "$container_name" 2>/dev/null || true)
+  [ -n "$container_id" ] || fail "could not resolve the $service container"
+  printf '%s\n' "$container_id"
 }
 
 show_service_logs() {

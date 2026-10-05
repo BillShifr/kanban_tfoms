@@ -109,8 +109,15 @@ async function openNavigation(page: Page) {
   return sidebar;
 }
 
-async function selectBoard(page: Page, name: string) {
+async function selectBoard(page: Page, name: string, departmentName?: string) {
   const navigation = await openNavigation(page);
+  if (departmentName) {
+    const expandDepartment = navigation.getByRole('button', {
+      name: `Развернуть отдел ${departmentName}`,
+      exact: true,
+    });
+    if (await expandDepartment.isVisible()) await expandDepartment.click();
+  }
   await navigation.getByRole('button', { name, exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
@@ -123,7 +130,7 @@ async function createBoardForTest(page: Page) {
   });
   expect(response.status()).toBe(201);
   await page.reload();
-  await selectBoard(page, name);
+  await selectBoard(page, name, department!.name);
   return name;
 }
 
