@@ -109,11 +109,7 @@ async function openNavigation(page: Page) {
   return sidebar;
 }
 
-async function selectBoard(
-  page: Page,
-  name: string,
-  departmentName?: string,
-) {
+async function selectBoard(page: Page, name: string, departmentName?: string) {
   const navigation = await openNavigation(page);
   if (departmentName) {
     const expandDepartment = navigation.getByRole('button', {
