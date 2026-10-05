@@ -29,8 +29,12 @@ case "$lifecycle_lock_held" in true | false) ;; *) fail "LIFECYCLE_LOCK_HELD mus
 
 if [ "$lifecycle_lock_held" = false ]; then
   mkdir -p "$state_dir"
-  exec 9>"$lock_file"
-  flock -w 60 9 || fail "another lifecycle operation is still running"
+  set +e
+  LIFECYCLE_LOCK_HELD=true flock -w 60 -E 73 -o "$lock_file" "$0" "$@"
+  lock_status=$?
+  set -e
+  [ "$lock_status" -ne 73 ] || fail "another lifecycle operation is still running"
+  exit "$lock_status"
 fi
 
 compose() {
