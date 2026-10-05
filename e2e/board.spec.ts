@@ -111,7 +111,10 @@ async function openNavigation(page: Page) {
 
 async function selectBoard(page: Page, name: string) {
   const navigation = await openNavigation(page);
-  await navigation.getByRole('button', { name, exact: true }).click();
+  const boardButton = navigation.getByRole('button', { name, exact: true });
+  await expect(boardButton).toBeVisible();
+  await boardButton.scrollIntoViewIfNeeded();
+  await boardButton.click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
 
