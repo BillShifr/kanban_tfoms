@@ -142,6 +142,8 @@ describe('container deployment configuration', () => {
     expect(startStack).toContain(
       'compose up -d --no-deps --force-recreate web',
     );
+    expect(startStack).toContain('container inspect');
+    expect(startStack).not.toContain('compose ps -q');
     expect(startStack).toContain('wait_for_healthy');
     expect(installAutoDeploy).toContain(
       'systemctl --user enable kanban-compose.service kanban-autodeploy.timer',
@@ -169,15 +171,18 @@ describe('container deployment configuration', () => {
         `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_PODMAN_LOG"
+if [ "$1" = container ] && [ "$2" = inspect ]; then
+  case "$*" in
+    *minimal-kanban_db_1) printf 'db-container\\n' ;;
+    *minimal-kanban_api_1) printf 'api-container\\n' ;;
+    *minimal-kanban_web_1) printf 'web-container\\n' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = inspect ]; then
   printf 'healthy\\n'
   exit 0
 fi
-case "$*" in
-  *" ps -q db") printf 'db-container\\n' ;;
-  *" ps -q api") printf 'api-container\\n' ;;
-  *" ps -q web") printf 'web-container\\n' ;;
-esac
 `,
         { mode: 0o700 },
       );
@@ -231,15 +236,18 @@ if [ ! -f "$FAKE_CHILD_PID_FILE" ]; then
   sleep 30 </dev/null >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$FAKE_CHILD_PID_FILE"
 fi
+if [ "$1" = container ] && [ "$2" = inspect ]; then
+  case "$*" in
+    *minimal-kanban_db_1) printf 'db-container\n' ;;
+    *minimal-kanban_api_1) printf 'api-container\n' ;;
+    *minimal-kanban_web_1) printf 'web-container\n' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = inspect ]; then
   printf 'healthy\n'
   exit 0
 fi
-case "$*" in
-  *" ps -q db") printf 'db-container\n' ;;
-  *" ps -q api") printf 'api-container\n' ;;
-  *" ps -q web") printf 'web-container\n' ;;
-esac
 `,
         { mode: 0o700 },
       );
@@ -288,6 +296,14 @@ esac
         `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_PODMAN_LOG"
+if [ "$1" = container ] && [ "$2" = inspect ]; then
+  case "$*" in
+    *minimal-kanban_db_1) printf 'db-container\\n' ;;
+    *minimal-kanban_api_1) printf 'api-container\\n' ;;
+    *minimal-kanban_web_1) printf 'web-container\\n' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = inspect ]; then
   case "$*" in
     *api-container) printf 'unhealthy\\n' ;;
@@ -295,11 +311,6 @@ if [ "$1" = inspect ]; then
   esac
   exit 0
 fi
-case "$*" in
-  *" ps -q db") printf 'db-container\\n' ;;
-  *" ps -q api") printf 'api-container\\n' ;;
-  *" ps -q web") printf 'web-container\\n' ;;
-esac
 `,
         { mode: 0o700 },
       );
