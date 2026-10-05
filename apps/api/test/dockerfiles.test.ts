@@ -31,17 +31,22 @@ const autoDeployUrl = new URL(
   import.meta.url,
 );
 const autoDeploy = readFileSync(autoDeployUrl, 'utf8');
+const backupUrl = new URL('../../../deploy/backup.sh', import.meta.url);
+const backup = readFileSync(backupUrl, 'utf8');
 const startStackUrl = new URL(
   '../../../deploy/start-stack.sh',
   import.meta.url,
 );
 const startStack = readFileSync(startStackUrl, 'utf8');
+const restoreUrl = new URL('../../../deploy/restore.sh', import.meta.url);
+const restore = readFileSync(restoreUrl, 'utf8');
 const installAutoDeployUrl = new URL(
   '../../../deploy/install-autodeploy.sh',
   import.meta.url,
 );
 const installAutoDeploy = readFileSync(installAutoDeployUrl, 'utf8');
 const stopStackUrl = new URL('../../../deploy/stop-stack.sh', import.meta.url);
+const stopStack = readFileSync(stopStackUrl, 'utf8');
 const composeService = readFileSync(
   new URL('../../../deploy/systemd/kanban-compose.service', import.meta.url),
   'utf8',
@@ -107,6 +112,8 @@ describe('container deployment configuration', () => {
   it('deploys only fast-forward main commits with successful CI and rollback', () => {
     for (const script of [
       autoDeployUrl,
+      backupUrl,
+      restoreUrl,
       startStackUrl,
       stopStackUrl,
       installAutoDeployUrl,
@@ -124,6 +131,11 @@ describe('container deployment configuration', () => {
     expect(autoDeploy).toContain('[ "$previous_image_tag" = "$target_head" ]');
     expect(autoDeploy).not.toContain('up -d --build');
     expect(autoDeploy).toContain('"$project_root/deploy/verify.sh"');
+    for (const script of [autoDeploy, backup, restore, startStack, stopStack]) {
+      expect(script).toContain('flock');
+      expect(script).toContain('-o "$lock_file"');
+      expect(script).not.toContain('exec 9>"$lock_file"');
+    }
     expect(startStack).toContain('build api web');
     expect(startStack).toContain('compose up -d db');
     expect(startStack).toContain('compose up -d --no-deps api');
@@ -199,6 +211,67 @@ esac
       expect(commands).toContainEqual(expect.stringContaining('api-container'));
       expect(commands).toContainEqual(expect.stringContaining('web-container'));
     } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it('does not leak the lifecycle lock into long-running Podman children', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kanban-lifecycle-lock-'));
+    const childPidFile = join(directory, 'child.pid');
+    try {
+      const envFile = join(directory, 'api.env');
+      const fakePodman = join(directory, 'podman');
+      const stateDir = join(directory, 'state');
+      writeFileSync(envFile, 'IMAGE_TAG=test\n', { mode: 0o600 });
+      writeFileSync(
+        fakePodman,
+        `#!/bin/sh
+set -eu
+if [ ! -f "$FAKE_CHILD_PID_FILE" ]; then
+  sleep 30 </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$FAKE_CHILD_PID_FILE"
+fi
+if [ "$1" = inspect ]; then
+  printf 'healthy\n'
+  exit 0
+fi
+case "$*" in
+  *" ps -q db") printf 'db-container\n' ;;
+  *" ps -q api") printf 'api-container\n' ;;
+  *" ps -q web") printf 'web-container\n' ;;
+esac
+`,
+        { mode: 0o700 },
+      );
+
+      const result = spawnSync('/bin/sh', [fileURLToPath(startStackUrl)], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          AUTODEPLOY_STATE_DIR: stateDir,
+          BUILD_IMAGES: 'false',
+          COMPOSE_COMMAND_TIMEOUT_SECONDS: '5',
+          ENV_FILE: envFile,
+          FAKE_CHILD_PID_FILE: childPidFile,
+          HEALTH_POLL_INTERVAL_SECONDS: '0',
+          HEALTH_TIMEOUT_SECONDS: '2',
+          PODMAN: fakePodman,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const lockProbe = spawnSync(
+        'flock',
+        ['-n', join(stateDir, 'lifecycle.lock'), 'true'],
+        { encoding: 'utf8' },
+      );
+      expect(lockProbe.status, lockProbe.stderr).toBe(0);
+    } finally {
+      try {
+        process.kill(Number(readFileSync(childPidFile, 'utf8').trim()));
+      } catch {
+        // The fixture process may already have exited.
+      }
       rmSync(directory, { force: true, recursive: true });
     }
   });

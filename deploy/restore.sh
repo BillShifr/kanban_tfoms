@@ -33,11 +33,15 @@ if [ "$lifecycle_lock_held" = false ]; then
     exit 1
   }
   mkdir -p "$state_dir"
-  exec 9>"$lock_file"
-  flock -w 60 9 || {
+  set +e
+  LIFECYCLE_LOCK_HELD=true flock -w 60 -E 73 -o "$lock_file" "$0" "$@"
+  lock_status=$?
+  set -e
+  [ "$lock_status" -ne 73 ] || {
     echo "another lifecycle operation is still running" >&2
     exit 1
   }
+  exit "$lock_status"
 fi
 
 require_safe_absolute_dir() {

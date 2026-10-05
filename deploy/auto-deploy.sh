@@ -13,6 +13,7 @@ github_repository=${GITHUB_REPOSITORY:-BillShifr/kanban_tfoms}
 ci_workflow=${CI_WORKFLOW_NAME:-CI}
 state_dir=${AUTODEPLOY_STATE_DIR:-"$HOME/.local/state/minimal-kanban"}
 lock_file="$state_dir/lifecycle.lock"
+lifecycle_lock_held=${LIFECYCLE_LOCK_HELD:-false}
 
 fail() {
   echo "autodeploy: $*" >&2
@@ -24,12 +25,22 @@ for command_name in curl flock git python3 sed; do
 done
 [ -r "$env_file" ] || fail "environment file is not readable: $env_file"
 [ -d "$project_root/.git" ] || fail "project is not a Git checkout: $project_root"
+case "$lifecycle_lock_held" in true | false) ;; *) fail "LIFECYCLE_LOCK_HELD must be true or false" ;; esac
 
-mkdir -p "$state_dir"
-exec 9>"$lock_file"
-if ! flock -n 9; then
-  echo "autodeploy: another deployment is already running"
-  exit 0
+if [ "$lifecycle_lock_held" = false ]; then
+  mkdir -p "$state_dir"
+  set +e
+  LIFECYCLE_LOCK_HELD=true flock -n -E 73 -o "$lock_file" "$0" "$@"
+  lock_status=$?
+  set -e
+  case "$lock_status" in
+    0) exit 0 ;;
+    73)
+      echo "autodeploy: another deployment is already running"
+      exit 0
+      ;;
+    *) exit "$lock_status" ;;
+  esac
 fi
 
 cd "$project_root"
