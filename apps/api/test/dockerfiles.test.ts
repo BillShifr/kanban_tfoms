@@ -93,6 +93,17 @@ describe('container deployment configuration', () => {
     }
   });
 
+  it('checks the API through the web proxy before declaring web healthy', () => {
+    for (const composeFile of [developmentCompose, productionCompose]) {
+      const webService = composeFile.split('\n  web:\n')[1];
+
+      expect(webService).toContain(
+        'http://127.0.0.1:8080/api/health || exit 1',
+      );
+      expect(webService).not.toContain('http://127.0.0.1:8080/ || exit 1');
+    }
+  });
+
   it('deploys only fast-forward main commits with successful CI and rollback', () => {
     for (const script of [
       autoDeployUrl,
@@ -116,7 +127,9 @@ describe('container deployment configuration', () => {
     expect(startStack).toContain('build api web');
     expect(startStack).toContain('compose up -d db');
     expect(startStack).toContain('compose up -d --no-deps api');
-    expect(startStack).toContain('compose up -d --no-deps web');
+    expect(startStack).toContain(
+      'compose up -d --no-deps --force-recreate web',
+    );
     expect(startStack).toContain('wait_for_healthy');
     expect(installAutoDeploy).toContain(
       'systemctl --user enable kanban-compose.service kanban-autodeploy.timer',
@@ -180,7 +193,7 @@ esac
       expect(index('build api web')).toBeGreaterThan(-1);
       expect(index('up -d db')).toBeLessThan(index('up -d --no-deps api'));
       expect(index('up -d --no-deps api')).toBeLessThan(
-        index('up -d --no-deps web'),
+        index('up -d --no-deps --force-recreate web'),
       );
       expect(commands).toContainEqual(expect.stringContaining('db-container'));
       expect(commands).toContainEqual(expect.stringContaining('api-container'));
@@ -240,7 +253,7 @@ esac
         expect.stringContaining('build api web'),
       );
       expect(commands).not.toContainEqual(
-        expect.stringContaining('up -d --no-deps web'),
+        expect.stringContaining('up -d --no-deps --force-recreate web'),
       );
     } finally {
       rmSync(directory, { force: true, recursive: true });

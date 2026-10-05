@@ -91,7 +91,10 @@ compose up -d db
 wait_for_healthy db
 compose up -d --no-deps api
 wait_for_healthy api
-compose up -d --no-deps web
+# nginx resolves the Compose service name when it starts and keeps the resolved
+# address. Recreate the stateless proxy after API recreation so it cannot keep
+# forwarding requests to the previous API container address.
+compose up -d --no-deps --force-recreate web
 wait_for_healthy web
 
 echo "start-stack: production stack is healthy"
