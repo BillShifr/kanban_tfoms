@@ -12,6 +12,13 @@ export type RuntimeConfig = {
   allowInsecureHttp: boolean;
   trustProxy: boolean;
   allowedOrigins: Set<string>;
+  mail: {
+    host: string;
+    port: number;
+    user: string;
+    password: string;
+    from: string;
+  } | null;
 };
 
 function booleanValue(
@@ -59,12 +66,30 @@ export function loadRuntimeConfig(
           ? []
           : defaultDevelopmentOrigins,
     ),
-    port = Number(environment.PORT ?? '3001');
+    port = Number(environment.PORT ?? '3001'),
+    mailValues = [
+      environment.SMTP_HOST,
+      environment.SMTP_PORT,
+      environment.SMTP_USER,
+      environment.SMTP_PASSWORD,
+      environment.SMTP_FROM,
+    ],
+    mailConfigured = mailValues.some((value) => Boolean(value));
 
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error('PORT must be an integer from 1 to 65535');
   if (nodeEnv === 'production' && allowedOrigins.size === 0)
     throw new Error('APP_ORIGIN is required in production');
+  if (mailConfigured && mailValues.some((value) => !value))
+    throw new Error(
+      'SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD and SMTP_FROM must be set together',
+    );
+  const smtpPort = Number(environment.SMTP_PORT ?? '587');
+  if (
+    mailConfigured &&
+    (!Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535)
+  )
+    throw new Error('SMTP_PORT must be an integer from 1 to 65535');
   const protocols = new Set<string>();
   for (const origin of allowedOrigins) {
     const parsed = new URL(origin);
@@ -101,6 +126,15 @@ export function loadRuntimeConfig(
     allowInsecureHttp,
     trustProxy,
     allowedOrigins,
+    mail: mailConfigured
+      ? {
+          host: environment.SMTP_HOST!,
+          port: smtpPort,
+          user: environment.SMTP_USER!,
+          password: environment.SMTP_PASSWORD!,
+          from: environment.SMTP_FROM!,
+        }
+      : null,
   };
 }
 

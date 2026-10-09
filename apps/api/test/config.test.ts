@@ -75,6 +75,23 @@ describe('runtime configuration', () => {
     ).toThrow('ALLOW_INSECURE_HTTP must be either true or false');
   });
 
+  it('keeps mail delivery disabled until a complete Outlook SMTP configuration exists', () => {
+    expect(loadRuntimeConfig({ NODE_ENV: 'test' }).mail).toBeNull();
+    expect(() =>
+      loadRuntimeConfig({ NODE_ENV: 'test', SMTP_HOST: 'smtp.office365.com' }),
+    ).toThrow('must be set together');
+    expect(
+      loadRuntimeConfig({
+        NODE_ENV: 'test',
+        SMTP_HOST: 'smtp.office365.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'kanban@ofoms.ru',
+        SMTP_PASSWORD: 'test-password',
+        SMTP_FROM: 'kanban@ofoms.ru',
+      }).mail,
+    ).toMatchObject({ host: 'smtp.office365.com', port: 587 });
+  });
+
   it('accepts only explicit production bootstrap credentials', () => {
     expect(() => assertBootstrapCredentials({}, 0)).toThrow(
       'are required for an empty database',

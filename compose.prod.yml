@@ -39,6 +39,11 @@ services:
       INITIAL_ADMIN_PASSWORD: '${INITIAL_ADMIN_PASSWORD:-}'
       NODE_ENV: production
       SESSION_COOKIE_SECURE: '${SESSION_COOKIE_SECURE:-true}'
+      SMTP_HOST: '${SMTP_HOST:-}'
+      SMTP_PORT: '${SMTP_PORT:-}'
+      SMTP_USER: '${SMTP_USER:-}'
+      SMTP_PASSWORD: '${SMTP_PASSWORD:-}'
+      SMTP_FROM: '${SMTP_FROM:-}'
       TRUST_PROXY: 'true'
       UPLOAD_DIR: /app/data/uploads
     depends_on: { db: { condition: service_healthy } }

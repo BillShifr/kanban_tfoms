@@ -33,6 +33,7 @@ import {
   Group,
   MantineProvider,
   Menu,
+  Modal,
   MultiSelect,
   NumberInput,
   PasswordInput,
@@ -58,6 +59,7 @@ import {
 } from '@tanstack/react-query';
 import {
   Archive,
+  Bell,
   CalendarClock,
   Check,
   ChevronLeft,
@@ -97,6 +99,7 @@ type AccountRole = 'superadmin' | 'admin' | 'user';
 type User = {
   id: string;
   email: string;
+  workEmail?: string | null;
   role: AccountRole;
   firstName?: string | null;
   lastName?: string | null;
@@ -148,6 +151,7 @@ type Task = {
   labels?: Tag[];
   dueAt?: string | null;
   estimatedMinutes?: number | null;
+  completedAt?: string | null;
   archivedAt?: string | null;
   activeTimer?: { id: string; startedAt: string } | null;
   timeSeconds?: number;
@@ -165,7 +169,7 @@ type Payload = {
 type Fail = { code?: string; message?: string };
 type TaskEvent = {
   id: string;
-  type: 'created' | 'column_changed' | 'assignee_changed';
+  type: 'created' | 'column_changed' | 'assignee_changed' | 'completed';
   createdAt: string;
   actor: Person | null;
   fromColumn: Tag | null;
@@ -232,6 +236,7 @@ const ru: Record<string, string> = {
   BOARD_NOT_ARCHIVED: 'Сначала архивируйте доску',
   BOARD_NOT_EMPTY:
     'Доску с задачами нельзя удалить навсегда — оставьте её в архиве',
+  TASK_ALREADY_COMPLETED: 'Задача уже отмечена выполненной',
 };
 const roleLabel: Record<AccountRole, string> = {
   user: 'Пользователь',
@@ -490,11 +495,13 @@ function UserMenu({
   logout,
   openArchivedBoards,
   openUsers,
+  openProfile,
 }: {
   user: User;
   logout: () => void;
   openArchivedBoards: () => void;
   openUsers: () => void;
+  openProfile: () => void;
 }) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const themes = [
@@ -532,6 +539,10 @@ function UserMenu({
           );
         })}
         <Menu.Divider />
+        <Menu.Item leftSection={<UserRound size={16} />} onClick={openProfile}>
+          Рабочая почта
+        </Menu.Item>
+        <Menu.Divider />
         <Menu.Item
           leftSection={<Archive size={16} />}
           onClick={openArchivedBoards}
@@ -560,6 +571,139 @@ function UserMenu({
         </Menu.Item>
       </Menu.Dropdown>
     </Menu>
+  );
+}
+function ProfileDrawer({
+  user,
+  updateCurrentUser,
+  close,
+}: {
+  user: User;
+  updateCurrentUser: (user: User) => void;
+  close: () => void;
+}) {
+  const [workEmail, setWorkEmail] = useState(user.workEmail ?? user.email),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState('');
+  return (
+    <MantineDrawer
+      opened
+      onClose={close}
+      position="right"
+      size={440}
+      title="Настройки профиля"
+      classNames={{ content: 'task-drawer', body: 'task-drawer-body' }}
+    >
+      <form
+        className="user-action-panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setBusy(true);
+          setError('');
+          void api<{ user: User }>('/auth/me', {
+            method: 'PATCH',
+            body: JSON.stringify({ workEmail }),
+          })
+            .then((result) => {
+              updateCurrentUser(result.user);
+              close();
+            })
+            .catch((reason: unknown) => setError(err(reason)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <Text c="dimmed" size="sm">
+          На этот адрес придёт письмо, когда созданная вами задача будет
+          отмечена выполненной.
+        </Text>
+        <TextInput
+          label="Рабочая почта"
+          type="email"
+          value={workEmail}
+          onChange={(event) => setWorkEmail(event.currentTarget.value)}
+          required
+          autoFocus
+        />
+        <Group justify="flex-end">
+          <Button type="button" variant="subtle" color="gray" onClick={close}>
+            Отмена
+          </Button>
+          <Button type="submit" loading={busy}>
+            Сохранить
+          </Button>
+        </Group>
+        {error && <p role="alert">{error}</p>}
+      </form>
+    </MantineDrawer>
+  );
+}
+type Notification = {
+  id: string;
+  type: 'task_assigned';
+  taskId: string;
+  boardId: string;
+  taskTitle: string;
+  readAt: string | null;
+  createdAt: string;
+  actor: Pick<Person, 'email' | 'firstName' | 'lastName'>;
+};
+function NotificationBell() {
+  const queryClient = useQueryClient();
+  const notifications = useQuery<{
+    notifications: Notification[];
+    unreadCount: number;
+  }>({
+    queryKey: ['notifications'],
+    queryFn: () => api('/notifications'),
+    refetchInterval: 30_000,
+  });
+  const markRead = (notification: Notification) => {
+    if (notification.readAt) return;
+    void api(`/notifications/${notification.id}/read`, { method: 'POST' }).then(
+      () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+    );
+  };
+  const items = notifications.data?.notifications ?? [];
+  return (
+    <Popover width={360} position="bottom-end" shadow="md">
+      <Popover.Target>
+        <ActionIcon
+          variant="subtle"
+          color="gray"
+          size="lg"
+          aria-label={`Уведомления${
+            notifications.data?.unreadCount
+              ? `: ${notifications.data.unreadCount} непрочитанных`
+              : ''
+          }`}
+        >
+          <Bell size={19} />
+        </ActionIcon>
+      </Popover.Target>
+      <Popover.Dropdown>
+        <Stack gap="xs">
+          <Text fw={700}>Уведомления</Text>
+          {items.length === 0 ? (
+            <Text c="dimmed" size="sm">
+              Новых уведомлений нет
+            </Text>
+          ) : (
+            items.map((notification) => (
+              <Button
+                key={notification.id}
+                variant={notification.readAt ? 'subtle' : 'light'}
+                color="gray"
+                justify="flex-start"
+                onClick={() => markRead(notification)}
+              >
+                {personLabel(notification.actor)} назначил(а) вам задачу «
+                {notification.taskTitle}»
+              </Button>
+            ))
+          )}
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
   );
 }
 function AdminUsersDrawer({
@@ -1500,7 +1644,7 @@ function CardBody({
           ))}
         </span>
       )}
-      <b>{task.title}</b>
+      <b>{task.completedAt ? `${task.title} · Выполнена` : task.title}</b>
       {task.description && (
         <span className="card-description">{task.description}</span>
       )}
@@ -1884,6 +2028,8 @@ function TaskHistory({ boardId, taskId }: { boardId: string; taskId: string }) {
                 <UserRound size={16} />
               ) : event.type === 'column_changed' ? (
                 <Columns3 size={16} />
+              ) : event.type === 'completed' ? (
+                <Check size={16} />
               ) : (
                 <Plus size={16} />
               )}
@@ -1892,6 +2038,7 @@ function TaskHistory({ boardId, taskId }: { boardId: string; taskId: string }) {
               <p>
                 <strong>{actor}</strong>{' '}
                 {event.type === 'created' && 'создал задачу'}
+                {event.type === 'completed' && 'отметил(а) задачу выполненной'}
                 {event.type === 'column_changed' && (
                   <>
                     переместил задачу: <b>{event.fromColumn?.name}</b>
@@ -1947,6 +2094,7 @@ function TaskDrawer({
     [workDate, setWorkDate] = useState(new Date().toISOString().slice(0, 10)),
     [labelName, setLabelName] = useState(''),
     [labelColor, setLabelColor] = useState('#2563eb'),
+    [confirmComplete, setConfirmComplete] = useState(false),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
   const canManage = true;
@@ -2191,9 +2339,22 @@ function TaskDrawer({
                 }))}
               />
               <Group justify="space-between" className="task-actions">
-                <Button type="submit" disabled={busy}>
-                  Сохранить изменения
-                </Button>
+                <Group gap="xs">
+                  <Button type="submit" disabled={busy}>
+                    Сохранить изменения
+                  </Button>
+                  {!task.completedAt && (
+                    <Button
+                      type="button"
+                      color="green"
+                      leftSection={<Check size={16} />}
+                      disabled={busy || !!task.archivedAt}
+                      onClick={() => setConfirmComplete(true)}
+                    >
+                      Выполнить
+                    </Button>
+                  )}
+                </Group>
                 <Menu position="top-end">
                   <Menu.Target>
                     <ActionIcon
@@ -2316,6 +2477,47 @@ function TaskDrawer({
           <TaskHistory boardId={data.board.id} taskId={task.id} />
         </Tabs.Panel>
       </Tabs>
+      <Modal
+        opened={confirmComplete}
+        onClose={() => setConfirmComplete(false)}
+        title="Подтвердить выполнение"
+        centered
+        size="sm"
+      >
+        <Stack gap="sm">
+          <Text>Отметить задачу «{task.title}» выполненной?</Text>
+          <Text c="dimmed" size="sm">
+            Автору задачи будет отправлено письмо на рабочую почту, если в
+            системе настроен SMTP Outlook.
+          </Text>
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              onClick={() => setConfirmComplete(false)}
+            >
+              Отмена
+            </Button>
+            <Button
+              color="green"
+              loading={busy}
+              onClick={() =>
+                void act(async () => {
+                  await api(
+                    `/boards/${data.board.id}/tasks/${task.id}/complete`,
+                    {
+                      method: 'POST',
+                    },
+                  );
+                  setConfirmComplete(false);
+                })
+              }
+            >
+              Да, выполнить
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </MantineDrawer>
   );
 }
@@ -3548,6 +3750,7 @@ function Workspace({
     [settings, setSettings] = useState(false),
     [archiveOpen, setArchiveOpen] = useState(false),
     [usersOpen, setUsersOpen] = useState(false),
+    [profileOpen, setProfileOpen] = useState(false),
     [mobileSidebarOpen, setMobileSidebarOpen] = useState(false),
     [sidebarCollapsed, setSidebarCollapsed] = useState(
       () => window.localStorage.getItem('kanban.sidebar-collapsed') === 'true',
@@ -3920,11 +4123,13 @@ function Workspace({
         <span data-testid="user-email" className="visually-hidden">
           {user.email}
         </span>
+        <NotificationBell />
         <UserMenu
           user={user}
           logout={logout}
           openArchivedBoards={() => setArchiveOpen(true)}
           openUsers={() => setUsersOpen(true)}
+          openProfile={() => setProfileOpen(true)}
         />
       </header>
       <aside className="workspace-sidebar" data-testid="desktop-sidebar">
@@ -4226,6 +4431,13 @@ function Workspace({
           ]}
           updateCurrentUser={updateCurrentUser}
           close={() => setUsersOpen(false)}
+        />
+      )}
+      {profileOpen && (
+        <ProfileDrawer
+          user={user}
+          updateCurrentUser={updateCurrentUser}
+          close={() => setProfileOpen(false)}
         />
       )}
     </main>

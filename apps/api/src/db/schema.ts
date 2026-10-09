@@ -18,10 +18,12 @@ export const taskEventType = pgEnum('task_event_type', [
   'created',
   'column_changed',
   'assignee_changed',
+  'completed',
 ]);
 export const users = pgTable('users', {
   id: uuid('id').primaryKey(),
   email: text('email').notNull().unique(),
+  workEmail: text('work_email'),
   passwordHash: text('password_hash').notNull(),
   role: userRole('role').notNull().default('user'),
   firstName: text('first_name'),
@@ -267,6 +269,33 @@ export const taskEvents = pgTable(
         (${t.type} = 'assignee_changed' AND ${t.fromColumnId} IS NULL AND ${t.fromColumnName} IS NULL AND ${t.toColumnId} IS NULL AND ${t.toColumnName} IS NULL AND NOT (${t.fromAssigneeId} IS NOT NULL AND ${t.fromAssigneeName} IS NOT NULL) AND NOT (${t.toAssigneeId} IS NOT NULL AND ${t.toAssigneeName} IS NOT NULL) AND ROW(${t.fromAssigneeId}, ${t.fromAssigneeName}) IS DISTINCT FROM ROW(${t.toAssigneeId}, ${t.toAssigneeName}))
       )`,
     ),
+  ],
+);
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    actorId: uuid('actor_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    boardId: uuid('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    taskTitle: text('task_title').notNull(),
+    type: text('type').notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('notifications_user_unread_idx').on(t.userId, t.readAt, t.createdAt),
   ],
 );
 export const attachments = pgTable(

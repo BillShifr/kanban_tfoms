@@ -777,10 +777,57 @@ test.describe('core board workflow', () => {
       },
     );
     expect(access.status()).toBe(204);
+    const boardData = await page.request.get(`/api/boards/${board.id}`);
+    expect(boardData.status()).toBe(200);
+    const assignedTaskTitle = uniqueName('Задача с уведомлением');
+    const assignedTask = await page.request.post(
+      `/api/boards/${board.id}/tasks`,
+      {
+        data: {
+          columnId: (
+            (await boardData.json()) as {
+              columns: { id: string }[];
+            }
+          ).columns[0]!.id,
+          title: assignedTaskTitle,
+          assigneeId: member.id,
+        },
+      },
+    );
+    expect(assignedTask.status()).toBe(201);
 
     await signOut(page, email);
     await signInAs(page, memberEmail, memberPassword);
+    await page
+      .getByRole('button', { name: 'Уведомления: 1 непрочитанных' })
+      .click();
+    await expect(
+      page.getByText(assignedTaskTitle, { exact: false }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Петров Иван' }).click();
+    await page.getByRole('menuitem', { name: 'Рабочая почта' }).click();
+    const workEmail = `work.${uniqueRun}@example.test`;
+    await page.getByLabel('Рабочая почта').fill(workEmail);
+    await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+    const profile = await page.request.get('/api/auth/me');
+    expect(profile.status()).toBe(200);
+    await expect(profile.json()).resolves.toMatchObject({
+      user: { workEmail },
+    });
     await selectBoard(page, board.name, department.name);
+    await taskCard(page, assignedTaskTitle).getByRole('button').first().click();
+    await page.getByRole('button', { name: 'Выполнить' }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Подтвердить выполнение' }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Да, выполнить' }).click();
+    await expect(
+      page.getByText(`${assignedTaskTitle} · Выполнена`, { exact: true }),
+    ).toBeVisible();
+    await page.getByRole('tab', { name: 'История' }).click();
+    await expect(page.getByText('отметил(а) задачу выполненной')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.task-drawer')).toBeHidden();
     const taskTitle = uniqueName('Задача автора');
     await addTask(page, taskTitle);
     const card = taskCard(page, taskTitle);

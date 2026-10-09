@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import {
   afterAll,
   afterEach,
@@ -14,6 +16,9 @@ import { runMigrations } from '../src/migrate.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const database = describe.skipIf(!databaseUrl);
+const migrationDirectory = fileURLToPath(
+  new URL('../drizzle/', import.meta.url),
+);
 
 database('PostgreSQL invariants', () => {
   const testPool = new Pool({ connectionString: databaseUrl });
@@ -78,7 +83,72 @@ database('PostgreSQL invariants', () => {
     const result = await client.query<{ count: string }>(
       'select count(*)::text as count from _migrations where checksum is not null',
     );
-    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(14);
+    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(16);
+  });
+
+  it('upgrades an existing account without losing its default work email', async () => {
+    const schema = `upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
+    await testPool.query(`create schema "${schema}"`);
+    const upgrade = await testPool.connect();
+    try {
+      await upgrade.query(`set search_path to "${schema}", public`);
+      const migrations = (await readdir(migrationDirectory))
+        .filter(
+          (name) => name.endsWith('.sql') && name <= '0013_user_names.sql',
+        )
+        .sort();
+      for (const migration of migrations) {
+        await upgrade.query('BEGIN');
+        try {
+          await upgrade.query(
+            await readFile(`${migrationDirectory}/${migration}`, 'utf8'),
+          );
+          await upgrade.query('COMMIT');
+        } catch (error) {
+          await upgrade.query('ROLLBACK');
+          throw error;
+        }
+      }
+      const legacyUserId = crypto.randomUUID();
+      const legacyEmail = `legacy-${legacyUserId}@example.test`;
+      await upgrade.query(
+        `insert into users(id,email,password_hash,role)
+         values ($1,$2,'hash','superadmin')`,
+        [legacyUserId, legacyEmail],
+      );
+      for (const migration of [
+        '0014_task_completed_event.sql',
+        '0015_notifications_and_work_email.sql',
+      ]) {
+        await upgrade.query('BEGIN');
+        try {
+          await upgrade.query(
+            await readFile(`${migrationDirectory}/${migration}`, 'utf8'),
+          );
+          await upgrade.query('COMMIT');
+        } catch (error) {
+          await upgrade.query('ROLLBACK');
+          throw error;
+        }
+      }
+      const migrated = await upgrade.query<{ work_email: string | null }>(
+        `select work_email from users where id=$1`,
+        [legacyUserId],
+      );
+      expect(migrated.rows[0]?.work_email).toBe(legacyEmail);
+
+      const legacyWriterId = crypto.randomUUID();
+      await expect(
+        upgrade.query(
+          `insert into users(id,email,password_hash,role)
+           values ($1,$2,'hash','user')`,
+          [legacyWriterId, `writer-${legacyWriterId}@example.test`],
+        ),
+      ).resolves.toMatchObject({ rowCount: 1 });
+    } finally {
+      upgrade.release();
+      await testPool.query(`drop schema if exists "${schema}" cascade`);
+    }
   });
 
   it('uses superadmin, admin, and user account roles and defaults to user', async () => {

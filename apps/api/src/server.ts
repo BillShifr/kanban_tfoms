@@ -27,6 +27,7 @@ import {
   departments,
   departmentMembers,
   labels,
+  notifications,
   sessions,
   taskLabels,
   taskEvents,
@@ -36,6 +37,7 @@ import {
   topics,
   users,
 } from './db/schema.js';
+import { sendTaskCompletedEmail } from './mail.js';
 import {
   defaultColumns,
   hashToken,
@@ -100,6 +102,7 @@ const credentials = z
     return parsed;
   });
 const accountRole = z.enum(['superadmin', 'admin', 'user']);
+const workEmail = z.string().trim().email().max(254).transform(normalizeEmail);
 const adminUserCreateInput = z
   .object({
     email: z.string().trim().email().max(254),
@@ -118,6 +121,7 @@ const adminUserPatchInput = z
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
+const profilePatchInput = z.object({ workEmail }).strict();
 const accessInput = z
   .object({
     departmentIds: z
@@ -193,6 +197,7 @@ const moveInput = z
 type User = {
   id: string;
   email: string;
+  workEmail: string | null;
   role: AccountRole;
   firstName: string | null;
   lastName: string | null;
@@ -231,6 +236,7 @@ async function seedSuperadmin() {
   await db.insert(users).values({
     id: crypto.randomUUID(),
     email: normalized,
+    workEmail: normalized,
     passwordHash: await hashPassword(password),
     role: 'superadmin',
   });
@@ -497,6 +503,7 @@ export async function buildApp() {
           .select({
             id: users.id,
             email: users.email,
+            workEmail: users.workEmail,
             role: users.role,
             firstName: users.firstName,
             lastName: users.lastName,
@@ -541,6 +548,17 @@ export async function buildApp() {
     const u = await user(r, reply);
     if (u) return { user: u };
   });
+  app.patch('/auth/me', async (r, reply) => {
+    const u = await user(r, reply),
+      p = profilePatchInput.safeParse(r.body);
+    if (!u) return;
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    await db
+      .update(users)
+      .set({ workEmail: p.data.workEmail })
+      .where(eq(users.id, u.id));
+    return { user: { ...u, workEmail: p.data.workEmail } };
+  });
   app.post('/auth/sign-in', async (r, reply) => {
     const p = credentials.safeParse(r.body);
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
@@ -580,6 +598,7 @@ export async function buildApp() {
       user: {
         id: candidate.id,
         email: candidate.email,
+        workEmail: candidate.workEmail,
         role: candidate.role,
         firstName: candidate.firstName,
         lastName: candidate.lastName,
@@ -591,6 +610,60 @@ export async function buildApp() {
     if (raw)
       await db.delete(sessions).where(eq(sessions.tokenHash, hashToken(raw)));
     reply.clearCookie(cookieName, { path: '/' });
+    return reply.code(204).send();
+  });
+  app.get('/notifications', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const items = await db
+      .select({
+        id: notifications.id,
+        type: notifications.type,
+        taskId: notifications.taskId,
+        boardId: notifications.boardId,
+        taskTitle: notifications.taskTitle,
+        readAt: notifications.readAt,
+        createdAt: notifications.createdAt,
+        actorEmail: users.email,
+        actorFirstName: users.firstName,
+        actorLastName: users.lastName,
+      })
+      .from(notifications)
+      .innerJoin(users, eq(users.id, notifications.actorId))
+      .where(eq(notifications.userId, u.id))
+      .orderBy(desc(notifications.createdAt), desc(notifications.id))
+      .limit(50);
+    return {
+      notifications: items.map((item) => ({
+        id: item.id,
+        type: item.type,
+        taskId: item.taskId,
+        boardId: item.boardId,
+        taskTitle: item.taskTitle,
+        readAt: item.readAt,
+        createdAt: item.createdAt,
+        actor: {
+          email: item.actorEmail,
+          firstName: item.actorFirstName,
+          lastName: item.actorLastName,
+        },
+      })),
+      unreadCount: items.filter((item) => !item.readAt).length,
+    };
+  });
+  app.post('/notifications/:notificationId/read', async (r, reply) => {
+    const u = await user(r, reply),
+      n = id(r, 'notificationId');
+    if (!u) return;
+    if (!n.success)
+      return reply.code(404).send({ code: 'NOTIFICATION_NOT_FOUND' });
+    const updated = await db
+      .update(notifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(notifications.id, n.data), eq(notifications.userId, u.id)))
+      .returning({ id: notifications.id });
+    if (!updated[0])
+      return reply.code(404).send({ code: 'NOTIFICATION_NOT_FOUND' });
     return reply.code(204).send();
   });
   app.get('/departments', async (r, reply) => {
@@ -1050,6 +1123,16 @@ export async function buildApp() {
         actorId: u.id,
         type: 'created',
       });
+      if (task.assigneeId && task.assigneeId !== u.id)
+        await tx.insert(notifications).values({
+          id: crypto.randomUUID(),
+          userId: task.assigneeId,
+          actorId: u.id,
+          taskId: task.id,
+          boardId: task.boardId,
+          taskTitle: task.title,
+          type: 'task_assigned',
+        });
       if (p.data.labelIds.length)
         await tx
           .insert(taskLabels)
@@ -1125,8 +1208,104 @@ export async function buildApp() {
           toAssigneeId: p.data.assigneeId ?? null,
           toAssigneeName: p.data.assigneeName ?? null,
         });
+      if (
+        previous &&
+        assignmentTouched &&
+        p.data.assigneeId &&
+        p.data.assigneeId !== u.id &&
+        p.data.assigneeId !== previous.assigneeId
+      )
+        await tx.insert(notifications).values({
+          id: crypto.randomUUID(),
+          userId: p.data.assigneeId,
+          actorId: u.id,
+          taskId: t.data,
+          boardId: b.data,
+          taskTitle:
+            p.data.title ??
+            (
+              await tx
+                .select({ title: tasks.title })
+                .from(tasks)
+                .where(eq(tasks.id, t.data))
+                .limit(1)
+            )[0]!.title,
+          type: 'task_assigned',
+        });
     });
     return { task: { id: t.data } };
+  });
+  app.post('/boards/:boardId/tasks/:taskId/complete', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      t = id(r, 'taskId');
+    if (!u) return;
+    if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+      return;
+    const result = await db.transaction(async (tx) => {
+      const task = (
+        await tx
+          .select({
+            id: tasks.id,
+            title: tasks.title,
+            authorId: tasks.authorId,
+            completedAt: tasks.completedAt,
+            authorWorkEmail: users.workEmail,
+            authorEmail: users.email,
+          })
+          .from(tasks)
+          .innerJoin(users, eq(users.id, tasks.authorId))
+          .where(
+            and(
+              eq(tasks.id, t.data),
+              eq(tasks.boardId, b.data),
+              isNull(tasks.archivedAt),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!task) return 'TASK_NOT_FOUND' as const;
+      if (task.completedAt) return 'TASK_ALREADY_COMPLETED' as const;
+      const now = new Date();
+      await tx
+        .update(tasks)
+        .set({ completedAt: now, updatedAt: now })
+        .where(eq(tasks.id, task.id));
+      await tx.insert(taskEvents).values({
+        id: crypto.randomUUID(),
+        taskId: task.id,
+        actorId: u.id,
+        type: 'completed',
+      });
+      const board = (
+        await tx
+          .select({ name: boards.name })
+          .from(boards)
+          .where(eq(boards.id, b.data))
+          .limit(1)
+      )[0];
+      return { ...task, boardName: board?.name ?? '', completedAt: now };
+    });
+    if (result === 'TASK_NOT_FOUND')
+      return reply.code(404).send({ code: result });
+    if (result === 'TASK_ALREADY_COMPLETED')
+      return reply.code(409).send({ code: result });
+    if (result.authorId !== u.id)
+      try {
+        await sendTaskCompletedEmail(runtime.mail, {
+          to: result.authorWorkEmail ?? result.authorEmail,
+          taskTitle: result.title,
+          boardName: result.boardName,
+          completedBy:
+            [u.lastName, u.firstName].filter(Boolean).join(' ') || u.email,
+        });
+      } catch (error) {
+        r.log.error(
+          { error, taskId: result.id },
+          'Task completion email failed',
+        );
+      }
+    return { task: { id: result.id, completedAt: result.completedAt } };
   });
   app.post('/boards/:boardId/tasks/:taskId/move', async (r, reply) => {
     const u = await user(r, reply),
@@ -1169,14 +1348,6 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!target) return 'COLUMN_NOT_FOUND';
-      const terminalColumn = (
-        await tx
-          .select({ id: columns.id })
-          .from(columns)
-          .where(and(eq(columns.boardId, b.data), isNull(columns.archivedAt)))
-          .orderBy(desc(columns.position))
-          .limit(1)
-      )[0];
       const sourceColumn = (
         await tx
           .select({ id: columns.id, name: columns.name })
@@ -1226,12 +1397,6 @@ export async function buildApp() {
             columnId: target.id,
             position: String(i + 1),
             updatedAt: now,
-            completedAt:
-              x.id !== task.id
-                ? undefined
-                : terminalColumn?.id === target.id
-                  ? (task.completedAt ?? now)
-                  : null,
           })
           .where(eq(tasks.id, x.id));
       if (sourceColumn.id !== target.id)
@@ -1582,6 +1747,7 @@ export async function buildApp() {
       email: normalizeEmail(p.data.email),
       passwordHash: await hashPassword(p.data.password),
       role: p.data.role,
+      workEmail: normalizeEmail(p.data.email),
       firstName: p.data.firstName,
       lastName: p.data.lastName,
     };
