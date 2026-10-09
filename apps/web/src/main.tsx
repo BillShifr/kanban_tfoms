@@ -94,7 +94,13 @@ import '@mantine/dates/styles.css';
 import 'dayjs/locale/ru';
 import './styles.css';
 type AccountRole = 'superadmin' | 'admin' | 'user';
-type User = { id: string; email: string; role: AccountRole };
+type User = {
+  id: string;
+  email: string;
+  role: AccountRole;
+  firstName?: string | null;
+  lastName?: string | null;
+};
 type AdminUser = User & {
   createdAt: string;
   archivedAt?: string | null;
@@ -113,6 +119,8 @@ type Department = { id: string; name: string; canManage?: boolean };
 type Person = {
   id: string;
   email: string;
+  firstName?: string | null;
+  lastName?: string | null;
   name?: string;
   role?: 'admin' | 'member';
   accountRole?: AccountRole;
@@ -132,6 +140,7 @@ type Task = {
   title: string;
   description: string;
   authorId?: string;
+  author?: Person;
   assigneeId?: string | null;
   assigneeName?: string | null;
   topicId?: string | null;
@@ -161,8 +170,14 @@ type TaskEvent = {
   actor: Person | null;
   fromColumn: Tag | null;
   toColumn: Tag | null;
-  fromAssignee: Pick<Person, 'id' | 'email' | 'name'> | { name: string } | null;
-  toAssignee: Pick<Person, 'id' | 'email' | 'name'> | { name: string } | null;
+  fromAssignee:
+    | Pick<Person, 'id' | 'email' | 'firstName' | 'lastName' | 'name'>
+    | { name: string }
+    | null;
+  toAssignee:
+    | Pick<Person, 'id' | 'email' | 'firstName' | 'lastName' | 'name'>
+    | { name: string }
+    | null;
 };
 const taskCollisionDetection: CollisionDetection = (args) =>
   closestCorners({
@@ -289,6 +304,23 @@ function duration(sec = 0) {
   const m = Math.floor(sec / 60);
   return m > 59 ? `${Math.floor(m / 60)} ч ${m % 60} мин` : `${m} мин`;
 }
+function personLabel(
+  person:
+    | Partial<Pick<Person, 'email' | 'firstName' | 'lastName' | 'name'>>
+    | null
+    | undefined,
+) {
+  const fullName = [person?.lastName, person?.firstName]
+    .filter((value): value is string => Boolean(value))
+    .join(' ');
+  return fullName || person?.name || person?.email || 'Пользователь';
+}
+function personOptionLabel(
+  person: Pick<Person, 'email' | 'firstName' | 'lastName'>,
+) {
+  const label = personLabel(person);
+  return label === person.email ? label : `${label} · ${person.email}`;
+}
 const userAssigneeKey = (id: string) => `user:${id}`,
   textAssigneeKey = (name: string) => `text:${name}`;
 function taskAssigneeKey(task: Task) {
@@ -313,18 +345,21 @@ function AssigneeCombobox({
       : undefined,
     selectedLabel = value.startsWith('text:')
       ? value.slice(5)
-      : (selectedMember?.name ?? selectedMember?.email ?? ''),
+      : selectedMember
+        ? personLabel(selectedMember)
+        : '',
     [search, setSearch] = useState(selectedLabel),
     normalizedSearch = search.trim().toLocaleLowerCase('ru-RU'),
     visibleMembers = members.filter((member) =>
-      `${member.name ?? ''} ${member.email}`
+      `${personOptionLabel(member)} ${member.name ?? ''}`
         .toLocaleLowerCase('ru-RU')
         .includes(normalizedSearch),
     ),
     exactMember = members.some(
       (member) =>
-        (member.name ?? member.email).toLocaleLowerCase('ru-RU') ===
-        normalizedSearch,
+        personLabel(member).toLocaleLowerCase('ru-RU') === normalizedSearch ||
+        personOptionLabel(member).toLocaleLowerCase('ru-RU') ===
+          normalizedSearch,
     ),
     canUseText = search.trim().length > 0 && !exactMember;
   useEffect(() => setSearch(selectedLabel), [selectedLabel]);
@@ -333,7 +368,7 @@ function AssigneeCombobox({
     onChange(resolved);
     if (resolved.startsWith('user:')) {
       const member = members.find((item) => item.id === resolved.slice(5));
-      setSearch(member?.name ?? member?.email ?? '');
+      setSearch(member ? personLabel(member) : '');
     } else setSearch(resolved.startsWith('text:') ? resolved.slice(5) : '');
     combobox.closeDropdown();
   };
@@ -375,7 +410,7 @@ function AssigneeCombobox({
                   key={member.id}
                   active={value === userAssigneeKey(member.id)}
                 >
-                  {member.name ?? member.email}
+                  {personOptionLabel(member)}
                 </Combobox.Option>
               ))}
             </Combobox.Group>
@@ -476,7 +511,7 @@ function UserMenu({
           className="user-menu-trigger"
           rightSection={<ChevronDown size={15} />}
         >
-          {user.email}
+          {personLabel(user)}
         </Button>
       </Menu.Target>
       <Menu.Dropdown>
@@ -531,19 +566,26 @@ function AdminUsersDrawer({
   currentUser,
   departments,
   boards,
+  updateCurrentUser,
   close,
 }: {
   currentUser: User;
   departments: Department[];
   boards: Board[];
+  updateCurrentUser: (user: User) => void;
   close: () => void;
 }) {
   const [status, setStatus] = useState<'active' | 'archived'>('active'),
     [email, setEmail] = useState(''),
+    [lastName, setLastName] = useState(''),
+    [firstName, setFirstName] = useState(''),
     [password, setPassword] = useState(''),
     [role, setRole] = useState<AccountRole>('user'),
     [passwordTarget, setPasswordTarget] = useState<AdminUser | null>(null),
     [newPassword, setNewPassword] = useState(''),
+    [profileTarget, setProfileTarget] = useState<AdminUser | null>(null),
+    [profileLastName, setProfileLastName] = useState(''),
+    [profileFirstName, setProfileFirstName] = useState(''),
     [archiveTarget, setArchiveTarget] = useState<AdminUser | null>(null),
     [accessTarget, setAccessTarget] = useState<AdminUser | null>(null),
     [departmentIds, setDepartmentIds] = useState<string[]>([]),
@@ -574,6 +616,7 @@ function AdminUsersDrawer({
     setDepartmentIds(item.departmentIds ?? []);
     setBoardIds(item.boardIds ?? []);
     setPasswordTarget(null);
+    setProfileTarget(null);
     setArchiveTarget(null);
   };
   const closeAccess = () => {
@@ -613,11 +656,15 @@ function AdminUsersDrawer({
                   email,
                   password,
                   role: isSuperadmin ? role : 'user',
+                  firstName: firstName.trim() || null,
+                  lastName: lastName.trim() || null,
                 }),
               }),
             );
             if (succeeded) {
               setEmail('');
+              setFirstName('');
+              setLastName('');
               setPassword('');
               setRole('user');
             }
@@ -636,6 +683,20 @@ function AdminUsersDrawer({
             onChange={(event) => setEmail(event.currentTarget.value)}
             required
           />
+          <Group grow align="flex-start">
+            <TextInput
+              label="Фамилия"
+              value={lastName}
+              onChange={(event) => setLastName(event.currentTarget.value)}
+              maxLength={80}
+            />
+            <TextInput
+              label="Имя"
+              value={firstName}
+              onChange={(event) => setFirstName(event.currentTarget.value)}
+              maxLength={80}
+            />
+          </Group>
           <PasswordInput
             label="Пароль для входа"
             description="Не менее 10 символов"
@@ -699,7 +760,10 @@ function AdminUsersDrawer({
               <section className="admin-user-row" key={item.id}>
                 <div className="admin-user-summary">
                   <div>
-                    <strong>{item.email}</strong>
+                    <strong>{personLabel(item)}</strong>
+                    {personLabel(item) !== item.email && (
+                      <span>{item.email}</span>
+                    )}
                     <span>
                       {item.archivedAt
                         ? `Отключён ${date(item.archivedAt)}`
@@ -765,10 +829,27 @@ function AdminUsersDrawer({
                             variant="subtle"
                             color="gray"
                             size="lg"
+                            aria-label={`Изменить ФИО ${item.email}`}
+                            onClick={() => {
+                              setProfileTarget(item);
+                              setProfileLastName(item.lastName ?? '');
+                              setProfileFirstName(item.firstName ?? '');
+                              setPasswordTarget(null);
+                              setArchiveTarget(null);
+                              closeAccess();
+                            }}
+                          >
+                            <Pencil size={17} />
+                          </ActionIcon>
+                          <ActionIcon
+                            variant="subtle"
+                            color="gray"
+                            size="lg"
                             aria-label={`Сменить пароль ${item.email}`}
                             disabled={ownAccount}
                             onClick={() => {
                               setPasswordTarget(item);
+                              setProfileTarget(null);
                               setNewPassword('');
                               setArchiveTarget(null);
                               closeAccess();
@@ -785,6 +866,7 @@ function AdminUsersDrawer({
                             onClick={() => {
                               setArchiveTarget(item);
                               setPasswordTarget(null);
+                              setProfileTarget(null);
                               closeAccess();
                             }}
                           >
@@ -989,6 +1071,66 @@ function AdminUsersDrawer({
                         loading={busy === `password:${item.id}`}
                       >
                         Сменить пароль
+                      </Button>
+                    </Group>
+                  </form>
+                )}
+                {profileTarget?.id === item.id && (
+                  <form
+                    className="user-action-panel"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      const succeeded = await run(`profile:${item.id}`, () =>
+                        api(`/admin/users/${item.id}`, {
+                          method: 'PATCH',
+                          body: JSON.stringify({
+                            firstName: profileFirstName.trim() || null,
+                            lastName: profileLastName.trim() || null,
+                          }),
+                        }),
+                      );
+                      if (succeeded) {
+                        if (item.id === currentUser.id)
+                          updateCurrentUser({
+                            ...currentUser,
+                            firstName: profileFirstName.trim() || null,
+                            lastName: profileLastName.trim() || null,
+                          });
+                        setProfileTarget(null);
+                      }
+                    }}
+                  >
+                    <TextInput
+                      label={`Фамилия ${item.email}`}
+                      value={profileLastName}
+                      onChange={(event) =>
+                        setProfileLastName(event.currentTarget.value)
+                      }
+                      maxLength={80}
+                      autoFocus
+                    />
+                    <TextInput
+                      label={`Имя ${item.email}`}
+                      value={profileFirstName}
+                      onChange={(event) =>
+                        setProfileFirstName(event.currentTarget.value)
+                      }
+                      maxLength={80}
+                    />
+                    <Group justify="flex-end">
+                      <Button
+                        type="button"
+                        variant="subtle"
+                        color="gray"
+                        onClick={() => setProfileTarget(null)}
+                      >
+                        Отмена
+                      </Button>
+                      <Button
+                        type="submit"
+                        loading={busy === `profile:${item.id}`}
+                      >
+                        Сохранить ФИО
                       </Button>
                     </Group>
                   </form>
@@ -1316,7 +1458,8 @@ function CardBody({
 }) {
   const assignee = data.members?.find((item) => item.id === task.assigneeId),
     assigneeLabel =
-      assignee?.name ?? assignee?.email ?? task.assigneeName ?? '',
+      (assignee ? personLabel(assignee) : undefined) ?? task.assigneeName ?? '',
+    authorLabel = personLabel(task.author),
     topic = data.topics?.find((item) => item.id === task.topicId),
     initials = assigneeLabel
       .split(/[\s@._-]+/)
@@ -1325,7 +1468,11 @@ function CardBody({
       .map((part) => part[0]?.toUpperCase())
       .join(''),
     hasMetadata = Boolean(
-      task.dueAt || task.estimatedMinutes || startedAt || assigneeLabel,
+      task.dueAt ||
+      task.estimatedMinutes ||
+      startedAt ||
+      assigneeLabel ||
+      task.author,
     );
   return (
     <>
@@ -1381,6 +1528,14 @@ function CardBody({
               title={assignee ? assigneeLabel : `${assigneeLabel} · имя`}
             >
               {initials}
+            </i>
+          )}
+          {task.author && (
+            <i
+              className="card-meta card-author"
+              title={`Автор: ${authorLabel}`}
+            >
+              <UserRound size={13} /> {authorLabel}
             </i>
           )}
         </footer>
@@ -1699,8 +1854,11 @@ function TaskHistory({ boardId, taskId }: { boardId: string; taskId: string }) {
     queryKey: ['task-history', boardId, taskId],
     queryFn: () => api(`/boards/${boardId}/tasks/${taskId}/history`),
   });
-  const person = (value: { name?: string; email?: string } | null) =>
-    value?.name ?? value?.email ?? 'Не назначен';
+  const person = (
+    value: Partial<
+      Pick<Person, 'firstName' | 'lastName' | 'name' | 'email'>
+    > | null,
+  ) => (value ? personLabel(value) : 'Не назначен');
   if (history.isLoading)
     return <div className="history-state">Загружаем историю…</div>;
   if (history.isError)
@@ -1886,6 +2044,10 @@ function TaskDrawer({
                   Запустить таймер
                 </Button>
               )}
+            </section>
+            <section className="task-author" aria-label="Автор задачи">
+              <span>Автор задачи</span>
+              <strong>{personLabel(task.author)}</strong>
             </section>
             <form className="task-form" onSubmit={save}>
               <TextInput
@@ -2249,7 +2411,7 @@ function TimeView({ data, close }: { data: Payload; close: () => void }) {
           onChange={(value) => setPerson(value ?? '')}
           data={(data.members ?? []).map((member) => ({
             value: member.id,
-            label: member.name ?? member.email,
+            label: personOptionLabel(member),
           }))}
         />
         <Select
@@ -2289,7 +2451,7 @@ function TimeView({ data, close }: { data: Payload; close: () => void }) {
             <div className="time-entry" key={entry.id}>
               <div>
                 <strong>{task?.title ?? 'Задача'}</strong>
-                <span>{member?.name ?? member?.email ?? 'Пользователь'}</span>
+                <span>{personLabel(member)}</span>
               </div>
               <div>
                 <strong>
@@ -2808,7 +2970,7 @@ function Settings({
                 return (
                   <div className="member-row" key={member.id}>
                     <div>
-                      <strong>{member.name ?? member.email}</strong>
+                      <strong>{personLabel(member)}</strong>
                       <span>
                         {member.accountRole
                           ? roleLabel[member.accountRole]
@@ -2875,7 +3037,7 @@ function Settings({
                     )
                     .map((candidate) => ({
                       value: candidate.id,
-                      label: candidate.email,
+                      label: personOptionLabel(candidate),
                     }))}
                   nothingFoundMessage="Все пользователи уже добавлены"
                   required
@@ -3351,7 +3513,15 @@ function SidebarContent({
     </div>
   );
 }
-function Workspace({ user, logout }: { user: User; logout: () => void }) {
+function Workspace({
+  user,
+  logout,
+  updateCurrentUser,
+}: {
+  user: User;
+  logout: () => void;
+  updateCurrentUser: (user: User) => void;
+}) {
   const q = useQueryClient(),
     boards = useQuery<{ boards: Board[] }>({
       queryKey: ['boards'],
@@ -3586,7 +3756,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
         group: 'Участники доски',
         items: (board.data?.members ?? []).map((member) => ({
           value: userAssigneeKey(member.id),
-          label: member.name ?? member.email,
+          label: personOptionLabel(member),
         })),
       },
       {
@@ -3597,6 +3767,19 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
         })),
       },
     ].filter((group) => group.items.length > 0);
+  const authorFilterData = Array.from(
+    new Map(
+      [
+        ...(board.data?.members ?? []),
+        ...(board.data?.columns ?? [])
+          .flatMap((column) => column.tasks)
+          .flatMap((taskItem) => (taskItem.author ? [taskItem.author] : [])),
+      ].map((person) => [
+        person.id,
+        { value: person.id, label: personOptionLabel(person) },
+      ]),
+    ).values(),
+  );
   const visible = (t: Task) => {
     const text =
       !filter ||
@@ -3897,10 +4080,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
                       searchable
                       value={authorFilter || null}
                       onChange={(value) => setAuthorFilter(value ?? '')}
-                      data={(board.data.members ?? []).map((member) => ({
-                        value: member.id,
-                        label: member.name ?? member.email,
-                      }))}
+                      data={authorFilterData}
                     />
                     <Select
                       label="Исполнитель"
@@ -4044,6 +4224,7 @@ function Workspace({ user, logout }: { user: User; logout: () => void }) {
             ...(boards.data?.boards ?? []),
             ...(archivedBoards.data?.boards ?? []),
           ]}
+          updateCurrentUser={updateCurrentUser}
           close={() => setUsersOpen(false)}
         />
       )}
@@ -4064,6 +4245,7 @@ function App() {
   return u ? (
     <Workspace
       user={u}
+      updateCurrentUser={setU}
       logout={async () => {
         await api('/auth/sign-out', { method: 'POST' });
         setU(null);

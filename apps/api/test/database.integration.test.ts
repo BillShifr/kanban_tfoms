@@ -78,7 +78,7 @@ database('PostgreSQL invariants', () => {
     const result = await client.query<{ count: string }>(
       'select count(*)::text as count from _migrations where checksum is not null',
     );
-    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(13);
+    expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(14);
   });
 
   it('uses superadmin, admin, and user account roles and defaults to user', async () => {
@@ -103,6 +103,22 @@ database('PostgreSQL invariants', () => {
       [defaultUserId, `${defaultUserId}@example.test`],
     );
     expect(created.rows[0]?.role).toBe('user');
+  });
+
+  it('allows legacy accounts without names and validates supplied names', async () => {
+    const legacy = await client.query<{
+      first_name: string | null;
+      last_name: string | null;
+    }>(`select first_name, last_name from users where id=$1`, [userA]);
+    expect(legacy.rows[0]).toEqual({ first_name: null, last_name: null });
+
+    await client.query(
+      `update users set first_name=$2, last_name=$3 where id=$1`,
+      [userA, 'Иван', 'Петров'],
+    );
+    await expect(
+      client.query(`update users set first_name=' Имя' where id=$1`, [userA]),
+    ).rejects.toMatchObject({ code: '23514' });
   });
 
   it('rejects a task whose column belongs to another board', async () => {
