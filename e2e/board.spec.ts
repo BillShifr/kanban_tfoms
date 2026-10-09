@@ -473,7 +473,9 @@ test.describe('core board workflow', () => {
     const title = `Проверить задачу ${Date.now()}`;
     await addTask(page, title);
     const card = taskCard(page, title);
-    await expect(card.locator('footer')).toHaveCount(0);
+    await expect(
+      card.getByTitle(`Автор: ${email}`, { exact: true }),
+    ).toBeVisible();
     await expect(backlogColumn(page).getByLabel('Задач: 1')).toBeVisible();
   });
 
@@ -644,10 +646,18 @@ test.describe('core board workflow', () => {
     await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
     await expect(page.getByText(adminEmail, { exact: true })).toBeVisible();
     await expect(page.getByText(userEmail, { exact: true })).toBeVisible();
+    const adminRow = page.locator('.admin-user-row').filter({
+      has: page.getByText(adminEmail, { exact: true }),
+    });
+    const userRow = page.locator('.admin-user-row').filter({
+      has: page.getByText(userEmail, { exact: true }),
+    });
     await expect(
-      page.getByText('Смирнова Анна', { exact: true }),
+      adminRow.getByText('Смирнова Анна', { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText('Петров Илья', { exact: true })).toBeVisible();
+    await expect(
+      userRow.getByText('Петров Илья', { exact: true }),
+    ).toBeVisible();
 
     await page
       .getByRole('button', { name: `Изменить ФИО ${userEmail}` })
@@ -656,7 +666,7 @@ test.describe('core board workflow', () => {
     await page.getByLabel(`Имя ${userEmail}`).fill('Сергей');
     await page.getByRole('button', { name: 'Сохранить ФИО' }).click();
     await expect(
-      page.getByText('Сидоров Сергей', { exact: true }),
+      userRow.getByText('Сидоров Сергей', { exact: true }),
     ).toBeVisible();
 
     await chooseOption(page, `Роль ${adminEmail}`, 'Пользователь');
@@ -749,7 +759,7 @@ test.describe('core board workflow', () => {
 
     await signOut(page, email);
     await signInAs(page, memberEmail, memberPassword);
-    await selectBoard(page, board.name);
+    await selectBoard(page, board.name, department.name);
     const taskTitle = uniqueName('Задача автора');
     await addTask(page, taskTitle);
     const card = taskCard(page, taskTitle);
@@ -1220,9 +1230,7 @@ test.describe('core board workflow', () => {
   async function createTask(page: Page, title: string) {
     await createBoardForTest(page);
     await addTask(page, title);
-    await backlogColumn(page)
-      .getByRole('button', { name: title, exact: true })
-      .click();
+    await taskCard(page, title).getByRole('button').first().click();
   }
 
   test('opens task details and edits a task', async ({ page }) => {
@@ -1243,9 +1251,7 @@ test.describe('core board workflow', () => {
     const boardName = await createBoardForTest(page);
     const title = `История задачи ${Date.now()}`;
     await addTask(page, title);
-    await backlogColumn(page)
-      .getByRole('button', { name: title, exact: true })
-      .click();
+    await taskCard(page, title).getByRole('button').first().click();
 
     await chooseOption(page, 'Исполнитель', email);
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();

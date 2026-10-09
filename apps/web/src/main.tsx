@@ -3767,6 +3767,19 @@ function Workspace({
         })),
       },
     ].filter((group) => group.items.length > 0);
+  const authorFilterData = Array.from(
+    new Map(
+      [
+        ...(board.data?.members ?? []),
+        ...(board.data?.columns ?? [])
+          .flatMap((column) => column.tasks)
+          .flatMap((taskItem) => (taskItem.author ? [taskItem.author] : [])),
+      ].map((person) => [
+        person.id,
+        { value: person.id, label: personOptionLabel(person) },
+      ]),
+    ).values(),
+  );
   const visible = (t: Task) => {
     const text =
       !filter ||
@@ -4067,25 +4080,7 @@ function Workspace({
                       searchable
                       value={authorFilter || null}
                       onChange={(value) => setAuthorFilter(value ?? '')}
-                      data={Array.from(
-                        new Map(
-                          board.data.columns
-                            .flatMap((column) => column.tasks)
-                            .filter(
-                              (
-                                taskItem,
-                              ): taskItem is Task & { author: Person } =>
-                                Boolean(taskItem.author),
-                            )
-                            .map((taskItem) => [
-                              taskItem.author.id,
-                              {
-                                value: taskItem.author.id,
-                                label: personOptionLabel(taskItem.author),
-                              },
-                            ]),
-                        ).values(),
-                      )}
+                      data={authorFilterData}
                     />
                     <Select
                       label="Исполнитель"
