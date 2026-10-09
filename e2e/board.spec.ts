@@ -5,7 +5,13 @@ const password = process.env.E2E_PASSWORD ?? 'change-me-now';
 
 type Department = { id: string; name: string };
 type AccountRole = 'superadmin' | 'admin' | 'user';
-type AdminAccount = { id: string; email: string; role: AccountRole };
+type AdminAccount = {
+  id: string;
+  email: string;
+  role: AccountRole;
+  firstName?: string | null;
+  lastName?: string | null;
+};
 type BoardSummary = { id: string; name: string; departmentId: string };
 
 const uniqueRun = `${Date.now()}-${process.pid}`;
@@ -74,9 +80,10 @@ async function createAccount(
   email: string,
   password: string,
   role: AccountRole,
+  names: { firstName?: string; lastName?: string } = {},
 ) {
   const response = await page.request.post('/api/admin/users', {
-    data: { email, password, role },
+    data: { email, password, role, ...names },
   });
   expect(response.status()).toBe(201);
   const body = (await response.json()) as { user: AdminAccount };
@@ -614,18 +621,36 @@ test.describe('core board workflow', () => {
     const adminPassword = 'sa-admin-pass-123';
     const userEmail = uniqueEmail('sa-user');
     const userPassword = 'sa-user-pass-123';
-    await createAccount(page, adminEmail, adminPassword, 'admin');
+    await createAccount(page, adminEmail, adminPassword, 'admin', {
+      firstName: 'Анна',
+      lastName: 'Смирнова',
+    });
     const createdUser = await createAccount(
       page,
       userEmail,
       userPassword,
       'user',
+      { firstName: 'Илья', lastName: 'Петров' },
     );
 
     await page.getByRole('button', { name: email }).click();
     await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
     await expect(page.getByText(adminEmail, { exact: true })).toBeVisible();
     await expect(page.getByText(userEmail, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText('Смирнова Анна', { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText('Петров Илья', { exact: true })).toBeVisible();
+
+    await page
+      .getByRole('button', { name: `Изменить ФИО ${userEmail}` })
+      .click();
+    await page.getByLabel(`Фамилия ${userEmail}`).fill('Сидоров');
+    await page.getByLabel(`Имя ${userEmail}`).fill('Сергей');
+    await page.getByRole('button', { name: 'Сохранить ФИО' }).click();
+    await expect(
+      page.getByText('Сидоров Сергей', { exact: true }),
+    ).toBeVisible();
 
     await chooseOption(page, `Роль ${adminEmail}`, 'Пользователь');
     await expect(
@@ -667,6 +692,9 @@ test.describe('core board workflow', () => {
       data: { email: userEmail, password: updatedPassword },
     });
     expect(newLogin.status()).toBe(200);
+    await expect(newLogin.json()).resolves.toMatchObject({
+      user: { firstName: 'Сергей', lastName: 'Сидоров' },
+    });
 
     await page.getByRole('button', { name: `Отключить ${userEmail}` }).click();
     await page
@@ -680,6 +708,55 @@ test.describe('core board workflow', () => {
     await expect(archived).toBeVisible();
     await archived.getByRole('button', { name: 'Восстановить' }).click();
     await expect(archived).toHaveCount(0);
+  });
+
+  test('shows task authors and assignees by surname and first name', async ({
+    page,
+  }) => {
+    await signIn(page);
+    const memberEmail = uniqueEmail('named-user');
+    const memberPassword = 'named-user-pass-123';
+    const member = await createAccount(
+      page,
+      memberEmail,
+      memberPassword,
+      'user',
+      { firstName: 'Иван', lastName: 'Петров' },
+    );
+    const department = await createDepartmentForTest(
+      page,
+      uniqueName('Отдел ФИО'),
+    );
+    const board = await createBoardApi(
+      page,
+      department.id,
+      uniqueName('Доска ФИО'),
+    );
+    const access = await page.request.put(
+      `/api/admin/users/${member.id}/access`,
+      {
+        data: { departmentIds: [department.id], boardIds: [] },
+      },
+    );
+    expect(access.status()).toBe(204);
+
+    await signOut(page, email);
+    await signInAs(page, memberEmail, memberPassword);
+    await selectBoard(page, board.name);
+    const taskTitle = uniqueName('Задача автора');
+    await addTask(page, taskTitle);
+    const card = taskCard(page, taskTitle);
+    await expect(card).toContainText('Петров Иван');
+    await card.getByRole('button').first().click();
+    await expect(page.getByLabel('Автор задачи')).toContainText('Петров Иван');
+
+    await page.getByLabel('Исполнитель').click();
+    await expect(
+      page.getByRole('option', {
+        name: `Петров Иван · ${memberEmail}`,
+        exact: true,
+      }),
+    ).toBeVisible();
   });
 
   test('admin sees every board, manages user access, and cannot manage elevated accounts', async ({

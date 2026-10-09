@@ -61,6 +61,13 @@ const cookieName = 'kanban_session',
   };
 const forbiddenAssigneeNameCharacters =
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+const personName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .refine((value) => !forbiddenAssigneeNameCharacters.test(value))
+  .nullable();
 const credentials = z
     .object({
       email: z.string().trim().email().max(254),
@@ -98,12 +105,16 @@ const adminUserCreateInput = z
     email: z.string().trim().email().max(254),
     password: z.string().min(10).max(256),
     role: accountRole.default('user'),
+    firstName: personName.optional().default(null),
+    lastName: personName.optional().default(null),
   })
   .strict();
 const adminUserPatchInput = z
   .object({
     password: z.string().min(10).max(256).optional(),
     role: accountRole.optional(),
+    firstName: personName.optional(),
+    lastName: personName.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0);
@@ -179,7 +190,13 @@ const moveInput = z
     beforeTaskId: z.string().uuid().nullable().optional(),
   })
   .strict();
-type User = { id: string; email: string; role: AccountRole };
+type User = {
+  id: string;
+  email: string;
+  role: AccountRole;
+  firstName: string | null;
+  lastName: string | null;
+};
 const id = (r: FastifyRequest, n: string) =>
   z
     .string()
@@ -377,6 +394,8 @@ async function boardTasks(boardId: string, includeArchived = false) {
       updatedAt: tasks.updatedAt,
       completedAt: tasks.completedAt,
       authorEmail: users.email,
+      authorFirstName: users.firstName,
+      authorLastName: users.lastName,
     })
     .from(tasks)
     .innerJoin(users, eq(users.id, tasks.authorId))
@@ -411,7 +430,12 @@ async function boardTasks(boardId: string, includeArchived = false) {
       .where(inArray(attachments.taskId, ids));
   return rows.map((row) => ({
     ...row,
-    author: { id: row.authorId, email: row.authorEmail },
+    author: {
+      id: row.authorId,
+      email: row.authorEmail,
+      firstName: row.authorFirstName,
+      lastName: row.authorLastName,
+    },
     labels: links.filter((l) => l.taskId === row.id),
     attachments: files.filter((file) => file.taskId === row.id),
   }));
@@ -470,7 +494,13 @@ export async function buildApp() {
     return (
       (
         await db
-          .select({ id: users.id, email: users.email, role: users.role })
+          .select({
+            id: users.id,
+            email: users.email,
+            role: users.role,
+            firstName: users.firstName,
+            lastName: users.lastName,
+          })
           .from(sessions)
           .innerJoin(users, eq(sessions.userId, users.id))
           .where(
@@ -547,7 +577,13 @@ export async function buildApp() {
     await db.delete(sessions).where(sql`${sessions.expiresAt} <= now()`);
     await session(reply, candidate.id);
     return {
-      user: { id: candidate.id, email: candidate.email, role: candidate.role },
+      user: {
+        id: candidate.id,
+        email: candidate.email,
+        role: candidate.role,
+        firstName: candidate.firstName,
+        lastName: candidate.lastName,
+      },
     };
   });
   app.post('/auth/sign-out', async (r, reply) => {
@@ -693,6 +729,8 @@ export async function buildApp() {
         .select({
           id: users.id,
           email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
           accountRole: users.role,
           archivedAt: users.archivedAt,
         })
@@ -903,7 +941,7 @@ export async function buildApp() {
       rawTasks = await boardTasks(p.data, includeArchived),
       members = (
         await pool.query(
-          `select u.id,u.email,'member'::text as role,u.role as "accountRole",u.archived_at as "archivedAt",
+          `select u.id,u.email,u.first_name as "firstName",u.last_name as "lastName",'member'::text as role,u.role as "accountRole",u.archived_at as "archivedAt",
           case when u.role in ('superadmin','admin') then 'global'
                when bm.user_id is not null and dm.user_id is not null then 'both'
                when bm.user_id is not null then 'board'
@@ -912,7 +950,7 @@ export async function buildApp() {
          left join board_members bm on bm.board_id=$1 and bm.user_id=u.id
          left join department_members dm on dm.department_id=(select department_id from boards where id=$1) and dm.user_id=u.id
          where u.archived_at is null and (u.role in ('superadmin','admin') or bm.user_id is not null or dm.user_id is not null)
-         order by u.email,u.id`,
+         order by u.last_name nulls last,u.first_name nulls last,u.email,u.id`,
           [p.data],
         )
       ).rows,
@@ -1245,7 +1283,12 @@ export async function buildApp() {
     ];
     const people = userIds.length
       ? await db
-          .select({ id: users.id, email: users.email })
+          .select({
+            id: users.id,
+            email: users.email,
+            firstName: users.firstName,
+            lastName: users.lastName,
+          })
           .from(users)
           .where(inArray(users.id, userIds))
       : [];
@@ -1476,6 +1519,8 @@ export async function buildApp() {
         id: users.id,
         email: users.email,
         role: users.role,
+        firstName: users.firstName,
+        lastName: users.lastName,
         createdAt: users.createdAt,
         archivedAt: users.archivedAt,
       })
@@ -1537,6 +1582,8 @@ export async function buildApp() {
       email: normalizeEmail(p.data.email),
       passwordHash: await hashPassword(p.data.password),
       role: p.data.role,
+      firstName: p.data.firstName,
+      lastName: p.data.lastName,
     };
     try {
       await db.insert(users).values(created);
@@ -1555,6 +1602,8 @@ export async function buildApp() {
         id: created.id,
         email: created.email,
         role: created.role,
+        firstName: created.firstName,
+        lastName: created.lastName,
         archivedAt: null,
       },
     });
@@ -1601,6 +1650,12 @@ export async function buildApp() {
         .set({
           ...(p.data.role === undefined ? {} : { role: p.data.role }),
           ...(passwordHash === undefined ? {} : { passwordHash }),
+          ...(p.data.firstName === undefined
+            ? {}
+            : { firstName: p.data.firstName }),
+          ...(p.data.lastName === undefined
+            ? {}
+            : { lastName: p.data.lastName }),
         })
         .where(eq(users.id, targetId.data));
       if (passwordHash !== undefined)
@@ -1960,7 +2015,7 @@ export async function buildApp() {
     return {
       members: (
         await pool.query(
-          `select u.id,u.email,'member'::text as role,u.role as "accountRole",u.archived_at as "archivedAt",
+          `select u.id,u.email,u.first_name as "firstName",u.last_name as "lastName",'member'::text as role,u.role as "accountRole",u.archived_at as "archivedAt",
           case when u.role in ('superadmin','admin') then 'global'
                when bm.user_id is not null and dm.user_id is not null then 'both'
                when bm.user_id is not null then 'board' else 'department' end as "accessSource"
@@ -1968,7 +2023,7 @@ export async function buildApp() {
          left join board_members bm on bm.board_id=$1 and bm.user_id=u.id
          left join department_members dm on dm.department_id=(select department_id from boards where id=$1) and dm.user_id=u.id
          where u.archived_at is null and (u.role in ('superadmin','admin') or bm.user_id is not null or dm.user_id is not null)
-         order by u.email,u.id`,
+         order by u.last_name nulls last,u.first_name nulls last,u.email,u.id`,
           [b.data],
         )
       ).rows,
