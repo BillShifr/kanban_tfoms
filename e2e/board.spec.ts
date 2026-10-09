@@ -626,6 +626,27 @@ test.describe('core board workflow', () => {
     expect(selfArchive.status()).toBe(409);
     expect(await selfArchive.json()).toEqual({ code: 'SELF_ARCHIVE' });
 
+    const selfProfileUpdate = await page.request.patch(
+      `/api/admin/users/${current.user.id}`,
+      { data: { firstName: 'Владислав', lastName: 'Тестов' } },
+    );
+    expect(selfProfileUpdate.status()).toBe(204);
+    const namedCurrentResponse = await page.request.get('/api/auth/me');
+    expect(namedCurrentResponse.status()).toBe(200);
+    await expect(namedCurrentResponse.json()).resolves.toMatchObject({
+      user: { firstName: 'Владислав', lastName: 'Тестов' },
+    });
+    const selfProfileRestore = await page.request.patch(
+      `/api/admin/users/${current.user.id}`,
+      {
+        data: {
+          firstName: current.user.firstName ?? null,
+          lastName: current.user.lastName ?? null,
+        },
+      },
+    );
+    expect(selfProfileRestore.status()).toBe(204);
+
     const adminEmail = uniqueEmail('sa-admin');
     const adminPassword = 'sa-admin-pass-123';
     const userEmail = uniqueEmail('sa-user');

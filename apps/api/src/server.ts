@@ -1637,7 +1637,11 @@ export async function buildApp() {
       )[0];
       if (!target) return 'USER_NOT_FOUND';
       if (!canManageAccount(u.role, target.role)) return 'FORBIDDEN';
-      if (target.role === 'superadmin' && p.data.role !== 'superadmin') {
+      if (
+        target.role === 'superadmin' &&
+        p.data.role !== undefined &&
+        p.data.role !== 'superadmin'
+      ) {
         const activeSuperadmins = await tx
           .select({ id: users.id })
           .from(users)
