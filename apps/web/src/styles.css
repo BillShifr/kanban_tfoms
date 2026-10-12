@@ -822,12 +822,43 @@ a {
   display: grid;
   gap: 6px;
 }
-.file-list a {
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.file-list a,
+.file-preview-trigger {
   width: fit-content;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
+}
+.file-preview-trigger {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mantine-color-blue-filled);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.file-preview-trigger:hover,
+.file-list a:hover {
+  text-decoration: underline;
+}
+.attachment-preview {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+}
+.attachment-preview-image {
+  max-width: 100%;
+  max-height: min(70vh, 760px);
+  display: block;
+  object-fit: contain;
 }
 .history-state {
   min-height: 160px;

@@ -31,6 +31,7 @@ import {
   Drawer as MantineDrawer,
   FileInput,
   Group,
+  Modal,
   MantineProvider,
   Menu,
   MultiSelect,
@@ -65,6 +66,8 @@ import {
   ChevronRight,
   Clock3,
   Columns3,
+  Download,
+  Eye,
   FileUp,
   Filter,
   GripVertical,
@@ -134,6 +137,9 @@ type Attachment = {
   mimeType?: string;
   sizeBytes?: number;
 };
+function isImageAttachment(attachment: Attachment) {
+  return attachment.mimeType?.startsWith('image/') ?? false;
+}
 type Task = {
   id: string;
   columnId: string;
@@ -1947,6 +1953,9 @@ function TaskDrawer({
     [workDate, setWorkDate] = useState(new Date().toISOString().slice(0, 10)),
     [labelName, setLabelName] = useState(''),
     [labelColor, setLabelColor] = useState('#2563eb'),
+    [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(
+      null,
+    ),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
   const canManage = true;
@@ -2279,16 +2288,27 @@ function TaskDrawer({
                 </div>
               </div>
               <div className="file-list">
-                {task.attachments?.map((attachment) => (
-                  <a
-                    key={attachment.id}
-                    href={`/api/attachments/${attachment.id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Paperclip size={15} /> {attachment.fileName}
-                  </a>
-                ))}
+                {task.attachments?.map((attachment) => {
+                  const url = `/api/attachments/${attachment.id}`;
+                  return (
+                    <div className="file-row" key={attachment.id}>
+                      {isImageAttachment(attachment) ? (
+                        <button
+                          type="button"
+                          className="file-preview-trigger"
+                          onClick={() => setPreviewAttachment(attachment)}
+                          aria-label={`Предпросмотр ${attachment.fileName}`}
+                        >
+                          <Eye size={15} /> {attachment.fileName}
+                        </button>
+                      ) : (
+                        <a href={url}>
+                          <Paperclip size={15} /> {attachment.fileName}
+                        </a>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               <FileInput
                 aria-label="Прикрепить файл"
@@ -2316,6 +2336,34 @@ function TaskDrawer({
           <TaskHistory boardId={data.board.id} taskId={task.id} />
         </Tabs.Panel>
       </Tabs>
+      <Modal
+        opened={!!previewAttachment}
+        onClose={() => setPreviewAttachment(null)}
+        title={
+          previewAttachment
+            ? `Предпросмотр: ${previewAttachment.fileName}`
+            : 'Предпросмотр изображения'
+        }
+        centered
+        size="xl"
+      >
+        {previewAttachment && (
+          <div className="attachment-preview">
+            <img
+              className="attachment-preview-image"
+              src={`/api/attachments/${previewAttachment.id}`}
+              alt={previewAttachment.fileName}
+            />
+            <Button
+              component="a"
+              href={`/api/attachments/${previewAttachment.id}`}
+              leftSection={<Download size={16} />}
+            >
+              Скачать оригинал
+            </Button>
+          </div>
+        )}
+      </Modal>
     </MantineDrawer>
   );
 }

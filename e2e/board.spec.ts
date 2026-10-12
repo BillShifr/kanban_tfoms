@@ -1409,20 +1409,31 @@ test.describe('core board workflow', () => {
     await page.getByRole('button', { name: 'Добавить время' }).click();
   });
 
-  test('shows and downloads an attached screenshot', async ({ page }) => {
+  test('previews and downloads an attached screenshot', async ({ page }) => {
     await signIn(page);
     await createTask(page, 'Задача с файлом');
     await page
       .getByRole('dialog')
       .locator('input[type="file"]')
       .setInputFiles({
-        name: 'screen.txt',
-        mimeType: 'text/plain',
-        buffer: Buffer.from('screen'),
+        name: 'screen.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nJ0AAAAASUVORK5CYII=',
+          'base64',
+        ),
       });
+    await page.getByRole('button', { name: 'Предпросмотр screen.png' }).click();
+    const preview = page.getByRole('dialog', {
+      name: 'Предпросмотр: screen.png',
+    });
+    await expect(preview).toBeVisible();
+    await expect(
+      preview.getByRole('img', { name: 'screen.png' }),
+    ).toBeVisible();
     const download = page.waitForEvent('download');
-    await page.getByRole('link', { name: 'screen.txt' }).click();
-    expect((await download).suggestedFilename()).toBe('screen.txt');
+    await preview.getByRole('link', { name: 'Скачать оригинал' }).click();
+    expect((await download).suggestedFilename()).toBe('screen.png');
   });
 
   test('filters the board by author, assignee, topic, label, due state, and archive state', async ({
