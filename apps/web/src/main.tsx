@@ -9,6 +9,7 @@ import {
   MouseSensor,
   TouchSensor,
   closestCorners,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
@@ -185,13 +186,28 @@ type TaskEvent = {
     | { name: string }
     | null;
 };
-const taskCollisionDetection: CollisionDetection = (args) =>
-  closestCorners({
-    ...args,
-    droppableContainers: args.droppableContainers.filter(
+const taskCollisionDetection: CollisionDetection = (args) => {
+  const droppableContainers = args.droppableContainers.filter(
       (container) => container.id !== args.active.id,
     ),
-  });
+    pointerCollisions = pointerWithin({ ...args, droppableContainers });
+
+  if (pointerCollisions.length > 0) {
+    const taskCollision = pointerCollisions.find(
+        ({ id }) =>
+          droppableContainers.find((container) => container.id === id)?.data
+            .current?.type === 'task',
+      ),
+      columnCollision = pointerCollisions.find(
+        ({ id }) =>
+          droppableContainers.find((container) => container.id === id)?.data
+            .current?.type === 'column',
+      );
+    return [taskCollision ?? columnCollision ?? pointerCollisions[0]];
+  }
+
+  return closestCorners({ ...args, droppableContainers });
+};
 const theme = createTheme({
   primaryColor: 'blue',
   defaultRadius: 'md',

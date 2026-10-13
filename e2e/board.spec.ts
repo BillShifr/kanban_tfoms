@@ -1233,6 +1233,9 @@ test.describe('core board workflow', () => {
       );
     }
     expect(Math.abs(placeholderBox!.x - cardBox!.x)).toBeLessThanOrEqual(1);
+
+    await page.mouse.move(targetBox!.x + 8, targetBox!.y + 110, { steps: 8 });
+    await expect(inProgress).toHaveClass(/drop-target/);
     await page.mouse.up();
 
     await expect(backlog.getByText(title, { exact: true })).toHaveCount(0);
