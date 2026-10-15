@@ -1269,21 +1269,28 @@ test.describe('core board workflow', () => {
     await signIn(page);
     await createTask(page, 'Тестовая задача');
     await expect(page.getByRole('dialog')).toBeVisible();
-    await expect(page.getByLabel('Описание')).toBeDisabled();
+    await expect(page.getByLabel('Описание задачи')).toContainText(
+      'Описание пока не добавлено.',
+    );
+    await expect(
+      page.getByRole('textbox', { name: 'Описание', exact: true }),
+    ).toHaveCount(0);
     await page.getByRole('button', { name: 'Редактировать' }).click();
     await page.getByLabel('Описание').fill('Уточнённое описание');
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
-    await expect(page.getByLabel('Описание')).toHaveValue(
+    await expect(page.getByLabel('Описание задачи')).toContainText(
       'Уточнённое описание',
     );
     await page.getByRole('button', { name: 'Редактировать' }).click();
     await page.getByLabel('Описание').fill('Не сохранять это значение');
     await page.getByRole('button', { name: 'Отменить редактирование' }).click();
     await page.getByRole('button', { name: 'Отбросить изменения' }).click();
-    await expect(page.getByLabel('Описание')).toHaveValue(
+    await expect(page.getByLabel('Описание задачи')).toContainText(
       'Уточнённое описание',
     );
-    await expect(page.getByLabel('Описание')).toBeDisabled();
+    await expect(
+      page.getByRole('textbox', { name: 'Описание', exact: true }),
+    ).toHaveCount(0);
   });
 
   test('shows a task preview and lets participants discuss it', async ({
@@ -1303,17 +1310,22 @@ test.describe('core board workflow', () => {
     ).toBeLessThan(2);
     await expect(
       drawer.getByRole('textbox', { name: 'Название', exact: true }),
-    ).toBeDisabled();
-    await expect(
-      drawer.getByRole('textbox', { name: 'Описание' }),
-    ).toBeDisabled();
-    await page.getByRole('tab', { name: 'Комментарии' }).click();
+    ).toHaveCount(0);
+    await expect(drawer.getByRole('textbox', { name: 'Описание' })).toHaveCount(
+      0,
+    );
+    await expect(drawer.getByLabel('Содержание задачи')).toContainText(
+      'Не назначен',
+    );
+    await expect(drawer.getByLabel('Содержание задачи')).toContainText(
+      'Без срока',
+    );
     await expect(page.getByText('Комментариев пока нет')).toBeVisible();
     await page
       .getByLabel('Новый комментарий')
       .fill('Проверил постановку, можно брать в работу.');
     await page.getByRole('tab', { name: 'История', exact: true }).click();
-    await page.getByRole('tab', { name: 'Комментарии' }).click();
+    await page.getByRole('tab', { name: 'Задача', exact: true }).click();
     await expect(page.getByLabel('Новый комментарий')).toHaveValue(
       'Проверил постановку, можно брать в работу.',
     );
@@ -1349,8 +1361,11 @@ test.describe('core board workflow', () => {
     await page.getByRole('button', { name: 'Отменить редактирование' }).click();
     await page.getByRole('button', { name: 'Отбросить изменения' }).click();
     await expect(
-      drawer.getByRole('textbox', { name: 'Название', exact: true }),
-    ).toHaveValue('Задача для обсуждения');
+      drawer.getByRole('heading', {
+        name: 'Задача для обсуждения',
+        exact: true,
+      }),
+    ).toBeVisible();
     await page.getByRole('button', { name: 'Другие действия' }).click();
     await page.getByRole('menuitem', { name: 'Удалить задачу' }).click();
     await expect(
@@ -1650,6 +1665,7 @@ test.describe('core board workflow', () => {
     await createTask(page, 'Задача со временем');
     await page.getByRole('button', { name: 'Запустить таймер' }).click();
     await page.getByRole('button', { name: 'Остановить таймер' }).click();
+    await page.getByText('Добавить время вручную', { exact: true }).click();
     await page.getByLabel('Продолжительность').fill('25');
     await page.getByRole('button', { name: 'Добавить время' }).click();
   });
