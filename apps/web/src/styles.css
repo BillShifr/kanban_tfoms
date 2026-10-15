@@ -918,6 +918,49 @@ a {
   color: var(--app-muted);
   font-size: 11px;
 }
+.task-comments {
+  display: grid;
+  gap: 18px;
+}
+.task-comments form {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+.task-comments form > div {
+  width: 100%;
+}
+.task-comments ol {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  list-style: none;
+}
+.task-comments li {
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-card);
+}
+.task-comments li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--app-text);
+  font-size: 13px;
+}
+.task-comments time {
+  color: var(--app-muted);
+  font-size: 11px;
+}
+.task-comments li p {
+  margin: 8px 0 0;
+  color: var(--app-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
 
 .time-filters {
   display: grid;

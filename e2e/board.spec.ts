@@ -116,6 +116,16 @@ async function openNavigation(page: Page) {
   return sidebar;
 }
 
+async function clickNavigationControl(navigation: Locator, name: string) {
+  const control = navigation.getByRole('button', { name, exact: true });
+  await expect(control).toBeAttached();
+  await control.evaluate((element) =>
+    element.scrollIntoView({ block: 'center', inline: 'nearest' }),
+  );
+  await expect(control).toBeVisible();
+  await control.click();
+}
+
 async function selectBoard(page: Page, name: string, departmentName?: string) {
   const navigation = await openNavigation(page);
   if (departmentName) {
@@ -125,7 +135,12 @@ async function selectBoard(page: Page, name: string, departmentName?: string) {
     });
     if (await expandDepartment.isVisible()) await expandDepartment.click();
   }
-  await navigation.getByRole('button', { name, exact: true }).click();
+  const boardButton = navigation.getByRole('button', { name, exact: true });
+  await expect(boardButton).toBeAttached();
+  await boardButton.evaluate((element) => {
+    element.scrollIntoView({ block: 'center', inline: 'nearest' });
+    element.click();
+  });
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
 
@@ -318,9 +333,7 @@ test.describe('core board workflow', () => {
     const boardName = uniqueName('Доска E2E');
     let navigation = await openNavigation(page);
 
-    await navigation
-      .getByRole('button', { name: 'Создать отдел', exact: true })
-      .click();
+    await clickNavigationControl(navigation, 'Создать отдел');
     const departmentForm = page.locator('form').filter({
       has: page.getByLabel('Название нового отдела'),
     });
@@ -337,9 +350,7 @@ test.describe('core board workflow', () => {
         exact: true,
       }),
     ).toBeVisible();
-    await navigation
-      .getByRole('button', { name: 'Создать доску', exact: true })
-      .click();
+    await clickNavigationControl(navigation, 'Создать доску');
     const boardForm = page.locator('form').filter({
       has: page.getByLabel('Название новой доски'),
     });
@@ -369,9 +380,7 @@ test.describe('core board workflow', () => {
     await signIn(page);
     const departmentName = uniqueName('Пустой отдел');
     const navigation = await openNavigation(page);
-    await navigation
-      .getByRole('button', { name: 'Создать отдел', exact: true })
-      .click();
+    await clickNavigationControl(navigation, 'Создать отдел');
     await page.getByLabel('Название нового отдела').fill(departmentName);
     await page
       .getByRole('button', { name: 'Создать отдел', exact: true })
@@ -788,6 +797,7 @@ test.describe('core board workflow', () => {
     await card.getByRole('button').first().click();
     await expect(page.getByLabel('Автор задачи')).toContainText('Петров Иван');
 
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await page.getByLabel('Исполнитель').click();
     await expect(
       page.getByRole('option', {
@@ -1147,9 +1157,7 @@ test.describe('core board workflow', () => {
 
     const departmentName = uniqueName('Отдел пользователя');
     const navigation = await openNavigation(page);
-    await navigation
-      .getByRole('button', { name: 'Создать отдел', exact: true })
-      .click();
+    await clickNavigationControl(navigation, 'Создать отдел');
     await page.getByLabel('Название нового отдела').fill(departmentName);
     await page
       .getByRole('button', { name: 'Создать отдел', exact: true })
@@ -1261,11 +1269,197 @@ test.describe('core board workflow', () => {
     await signIn(page);
     await createTask(page, 'Тестовая задача');
     await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.getByLabel('Описание')).toBeDisabled();
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await page.getByLabel('Описание').fill('Уточнённое описание');
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
     await expect(page.getByLabel('Описание')).toHaveValue(
       'Уточнённое описание',
     );
+    await page.getByRole('button', { name: 'Редактировать' }).click();
+    await page.getByLabel('Описание').fill('Не сохранять это значение');
+    await page.getByRole('button', { name: 'Отменить редактирование' }).click();
+    await expect(page.getByLabel('Описание')).toHaveValue(
+      'Уточнённое описание',
+    );
+    await expect(page.getByLabel('Описание')).toBeDisabled();
+  });
+
+  test('shows a task preview and lets participants discuss it', async ({
+    page,
+  }) => {
+    await signIn(page);
+    await createTask(page, 'Задача для обсуждения');
+
+    const drawer = page.getByRole('dialog', {
+      name: 'Задача Задача для обсуждения',
+    });
+    await expect(
+      drawer.getByRole('textbox', { name: 'Название', exact: true }),
+    ).toBeDisabled();
+    await expect(
+      drawer.getByRole('textbox', { name: 'Описание' }),
+    ).toBeDisabled();
+    await page.getByRole('tab', { name: 'Комментарии' }).click();
+    await expect(page.getByText('Комментариев пока нет')).toBeVisible();
+    await page
+      .getByLabel('Новый комментарий')
+      .fill('Проверил постановку, можно брать в работу.');
+    await page.getByRole('button', { name: 'Отправить комментарий' }).click();
+    const comment = page.getByTestId('task-comment');
+    await expect(comment).toContainText(email);
+    await expect(comment).toContainText(
+      'Проверил постановку, можно брать в работу.',
+    );
+    await page.getByRole('tab', { name: 'Задача', exact: true }).click();
+    await page.getByRole('button', { name: 'Другие действия' }).click();
+    await page.getByRole('menuitem', { name: 'Удалить задачу' }).click();
+    await expect(
+      page.getByRole('dialog', { name: 'Удалить задачу?' }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Удалить навсегда' }).click();
+    await expect(taskCard(page, 'Задача для обсуждения')).toHaveCount(0);
+  });
+
+  test('enforces task deletion ownership and superadmin override', async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      testInfo.project.name === 'mobile',
+      'Role enforcement is API-level and does not depend on viewport',
+    );
+    await signIn(page);
+    const userEmail = uniqueEmail('delete-user');
+    const adminEmail = uniqueEmail('delete-admin');
+    const userPassword = 'delete-user-pass-123';
+    const adminPassword = 'delete-admin-pass-123';
+    const ordinaryUser = await createAccount(
+      page,
+      userEmail,
+      userPassword,
+      'user',
+    );
+    await createAccount(page, adminEmail, adminPassword, 'admin');
+    const department = await createDepartmentForTest(
+      page,
+      uniqueName('Отдел удаления'),
+    );
+    const board = await createBoardApi(
+      page,
+      department.id,
+      uniqueName('Доска удаления'),
+    );
+    const access = await page.request.put(
+      `/api/admin/users/${ordinaryUser.id}/access`,
+      { data: { departmentIds: [], boardIds: [board.id] } },
+    );
+    expect(access.status()).toBe(204);
+    const boardResponse = await page.request.get(`/api/boards/${board.id}`);
+    const boardData = (await boardResponse.json()) as {
+      columns: Array<{ id: string }>;
+    };
+    const superTaskResponse = await page.request.post(
+      `/api/boards/${board.id}/tasks`,
+      {
+        data: {
+          columnId: boardData.columns[0]!.id,
+          title: uniqueName('Задача суперадминистратора'),
+        },
+      },
+    );
+    const superTask = (await superTaskResponse.json()) as {
+      task: { id: string };
+    };
+
+    await signOut(page, email);
+    await signInAs(page, userEmail, userPassword);
+    const forbiddenUserDelete = await page.request.delete(
+      `/api/boards/${board.id}/tasks/${superTask.task.id}`,
+    );
+    expect(forbiddenUserDelete.status()).toBe(403);
+    const comment = await page.request.post(
+      `/api/boards/${board.id}/tasks/${superTask.task.id}/comments`,
+      { data: { body: 'Комментарий другого участника' } },
+    );
+    expect(comment.status()).toBe(201);
+    const ownTaskResponse = await page.request.post(
+      `/api/boards/${board.id}/tasks`,
+      {
+        data: {
+          columnId: boardData.columns[0]!.id,
+          title: uniqueName('Собственная задача пользователя'),
+        },
+      },
+    );
+    const ownTask = (await ownTaskResponse.json()) as { task: { id: string } };
+    expect(
+      (
+        await page.request.delete(
+          `/api/boards/${board.id}/tasks/${ownTask.task.id}`,
+        )
+      ).status(),
+    ).toBe(204);
+
+    await signOut(page, userEmail);
+    await signInAs(page, adminEmail, adminPassword);
+    expect(
+      (
+        await page.request.delete(
+          `/api/boards/${board.id}/tasks/${superTask.task.id}`,
+        )
+      ).status(),
+    ).toBe(403);
+    const ownAdminTaskResponse = await page.request.post(
+      `/api/boards/${board.id}/tasks`,
+      {
+        data: {
+          columnId: boardData.columns[0]!.id,
+          title: uniqueName('Собственная задача администратора'),
+        },
+      },
+    );
+    const ownAdminTask = (await ownAdminTaskResponse.json()) as {
+      task: { id: string };
+    };
+    expect(
+      (
+        await page.request.delete(
+          `/api/boards/${board.id}/tasks/${ownAdminTask.task.id}`,
+        )
+      ).status(),
+    ).toBe(204);
+    const adminTaskResponse = await page.request.post(
+      `/api/boards/${board.id}/tasks`,
+      {
+        data: {
+          columnId: boardData.columns[0]!.id,
+          title: uniqueName('Задача администратора для удаления суперadmin'),
+        },
+      },
+    );
+    const adminTask = (await adminTaskResponse.json()) as {
+      task: { id: string };
+    };
+
+    await signOut(page, adminEmail);
+    await signIn(page);
+    const comments = await page.request.get(
+      `/api/boards/${board.id}/tasks/${superTask.task.id}/comments`,
+    );
+    expect(
+      (
+        (await comments.json()) as {
+          comments: Array<{ body: string }>;
+        }
+      ).comments[0]?.body,
+    ).toBe('Комментарий другого участника');
+    expect(
+      (
+        await page.request.delete(
+          `/api/boards/${board.id}/tasks/${adminTask.task.id}`,
+        )
+      ).status(),
+    ).toBe(204);
   });
 
   test('records and shows the task path with actors and assignees', async ({
@@ -1277,8 +1471,10 @@ test.describe('core board workflow', () => {
     await addTask(page, title);
     await taskCard(page, title).getByRole('button').first().click();
 
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseOption(page, 'Исполнитель', email);
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseOption(page, 'Колонка', 'В работе');
     await expect(columnByName(page, 'В работе').getByText(title)).toBeVisible();
 
@@ -1321,6 +1517,7 @@ test.describe('core board workflow', () => {
     await addTask(page, title);
     await taskCard(page, title).getByRole('button').first().click();
 
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseTextAssignee(page, externalAssignee);
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
     await page.keyboard.press('Escape');
@@ -1367,6 +1564,7 @@ test.describe('core board workflow', () => {
     ).toBeVisible();
 
     await page.getByRole('tab', { name: 'Задача', exact: true }).click();
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseAssignee(page, email);
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
     await page.getByRole('tab', { name: 'История' }).click();
@@ -1377,6 +1575,7 @@ test.describe('core board workflow', () => {
     ).toBeVisible();
 
     await page.getByRole('tab', { name: 'Задача', exact: true }).click();
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseAssignee(page, 'Не назначен');
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
     await page.getByRole('tab', { name: 'История' }).click();
@@ -1392,6 +1591,7 @@ test.describe('core board workflow', () => {
   }) => {
     await signIn(page);
     await createTask(page, 'Переносимая задача');
+    await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseOption(page, 'Колонка', 'В работе');
     await expect(
       page

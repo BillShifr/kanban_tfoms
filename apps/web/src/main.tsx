@@ -75,6 +75,7 @@ import {
   History as HistoryIcon,
   KeyRound,
   Menu as MenuIcon,
+  MessageCircle,
   LogOut,
   Moon,
   MoreHorizontal,
@@ -185,6 +186,12 @@ type TaskEvent = {
     | Pick<Person, 'id' | 'email' | 'firstName' | 'lastName' | 'name'>
     | { name: string }
     | null;
+};
+type TaskComment = {
+  id: string;
+  body: string;
+  createdAt: string;
+  author: Person;
 };
 const taskCollisionDetection: CollisionDetection = (args) => {
   const droppableContainers = args.droppableContainers.filter(
@@ -353,10 +360,12 @@ function AssigneeCombobox({
   members,
   value,
   onChange,
+  disabled = false,
 }: {
   members: Person[];
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   const combobox = useCombobox({
       onDropdownClose: () => combobox.resetSelectedOption(),
@@ -416,6 +425,7 @@ function AssigneeCombobox({
             combobox.selectFirstOption();
           }}
           maxLength={120}
+          disabled={disabled}
           rightSection={<Combobox.Chevron />}
         />
       </Combobox.Target>
@@ -1942,18 +1952,99 @@ function TaskHistory({ boardId, taskId }: { boardId: string; taskId: string }) {
     </ol>
   );
 }
+function TaskComments({
+  boardId,
+  taskId,
+  archived,
+}: {
+  boardId: string;
+  taskId: string;
+  archived: boolean;
+}) {
+  const comments = useQuery<{ comments: TaskComment[] }>({
+      queryKey: ['task-comments', boardId, taskId],
+      queryFn: () => api(`/boards/${boardId}/tasks/${taskId}/comments`),
+    }),
+    [body, setBody] = useState(''),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState('');
+  return (
+    <section className="task-comments">
+      {!archived && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!body.trim()) return;
+            setBusy(true);
+            setError('');
+            void api(`/boards/${boardId}/tasks/${taskId}/comments`, {
+              method: 'POST',
+              body: JSON.stringify({ body: body.trim() }),
+            })
+              .then(async () => {
+                setBody('');
+                await comments.refetch();
+              })
+              .catch((reason) => setError(err(reason)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          <Textarea
+            label="Новый комментарий"
+            placeholder="Напишите сообщение участникам задачи"
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            minRows={3}
+            maxLength={4000}
+            required
+          />
+          <Button type="submit" loading={busy} disabled={!body.trim()}>
+            Отправить комментарий
+          </Button>
+        </form>
+      )}
+      {error && <p role="alert">{error}</p>}
+      {comments.isLoading ? (
+        <Skeleton height={80} />
+      ) : comments.data?.comments.length ? (
+        <ol aria-label="Комментарии к задаче">
+          {comments.data.comments.map((comment) => (
+            <li key={comment.id} data-testid="task-comment">
+              <div>
+                <strong>{personLabel(comment.author)}</strong>
+                <time dateTime={comment.createdAt}>
+                  {new Intl.DateTimeFormat('ru-RU', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  }).format(new Date(comment.createdAt))}
+                </time>
+              </div>
+              <p>{comment.body}</p>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="empty-state">Комментариев пока нет</p>
+      )}
+    </section>
+  );
+}
 function TaskDrawer({
   data,
   task,
+  currentUser,
   close,
   refresh,
 }: {
   data: Payload;
   task: Task;
+  currentUser: User;
   close: () => void;
   refresh: () => Promise<unknown>;
 }) {
-  const [t, setT] = useState(task.title),
+  const [editing, setEditing] = useState(false),
+    [confirmDelete, setConfirmDelete] = useState(false),
+    [t, setT] = useState(task.title),
     [desc, setDesc] = useState(task.description ?? ''),
     [assignee, setAssignee] = useState(taskAssigneeKey(task)),
     [topic, setTopic] = useState(task.topicId ?? ''),
@@ -1974,7 +2065,21 @@ function TaskDrawer({
     ),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
-  const canManage = true;
+  const canManage = true,
+    canDelete =
+      currentUser.role === 'superadmin' || task.authorId === currentUser.id;
+  const resetDraft = () => {
+    setT(task.title);
+    setDesc(task.description ?? '');
+    setAssignee(taskAssigneeKey(task));
+    setTopic(task.topicId ?? '');
+    setLabels(task.labelIds ?? task.labels?.map((label) => label.id) ?? []);
+    setDue(date(task.dueAt));
+    setEstimate(task.estimatedMinutes ? String(task.estimatedMinutes) : '');
+    setMove(task.columnId);
+    setEditing(false);
+    setError('');
+  };
   const act = async (f: () => Promise<unknown>) => {
     setBusy(true);
     setError('');
@@ -1994,8 +2099,8 @@ function TaskDrawer({
       : assignee.startsWith('text:')
         ? { assigneeName: assignee.slice(5) }
         : { assigneeId: null };
-    return act(() =>
-      api(`/boards/${data.board.id}/tasks/${task.id}`, {
+    return act(async () => {
+      await api(`/boards/${data.board.id}/tasks/${task.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           title: t,
@@ -2006,8 +2111,9 @@ function TaskDrawer({
           dueAt: due || null,
           estimatedMinutes: estimate ? Number(estimate) : null,
         }),
-      }),
-    );
+      });
+      setEditing(false);
+    });
   };
   return (
     <MantineDrawer
@@ -2029,12 +2135,25 @@ function TaskDrawer({
       <Tabs defaultValue="details" keepMounted={false} className="task-tabs">
         <Tabs.List>
           <Tabs.Tab value="details">Задача</Tabs.Tab>
+          <Tabs.Tab value="comments" leftSection={<MessageCircle size={15} />}>
+            Комментарии
+          </Tabs.Tab>
           <Tabs.Tab value="history" leftSection={<HistoryIcon size={15} />}>
             История
           </Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="details" pt="lg">
           <div className="task-details">
+            <Group justify="flex-end">
+              <Button
+                variant={editing ? 'default' : 'light'}
+                leftSection={editing ? <X size={16} /> : <Pencil size={16} />}
+                onClick={() => (editing ? resetDraft() : setEditing(true))}
+                disabled={Boolean(task.archivedAt)}
+              >
+                {editing ? 'Отменить редактирование' : 'Редактировать'}
+              </Button>
+            </Group>
             <section className="timer-panel" aria-label="Учёт времени">
               <div>
                 <span>Затрачено</span>
@@ -2080,6 +2199,7 @@ function TaskDrawer({
                 value={t}
                 onChange={(e) => setT(e.target.value)}
                 required
+                disabled={!editing}
               />
               <Textarea
                 label="Описание"
@@ -2089,12 +2209,14 @@ function TaskDrawer({
                 autosize
                 minRows={5}
                 maxRows={12}
+                disabled={!editing}
               />
               <div className="property-grid">
                 <AssigneeCombobox
                   members={data.members ?? []}
                   value={assignee}
                   onChange={setAssignee}
+                  disabled={!editing}
                 />
                 <Select
                   label="Тема"
@@ -2107,6 +2229,7 @@ function TaskDrawer({
                     value: item.id,
                     label: item.name,
                   }))}
+                  disabled={!editing}
                 />
                 <DateInput
                   label="Срок"
@@ -2116,6 +2239,7 @@ function TaskDrawer({
                   onChange={(value) => setDue(value ?? '')}
                   valueFormat="DD.MM.YYYY"
                   clearable
+                  disabled={!editing}
                 />
                 <NumberInput
                   label="Оценка времени"
@@ -2124,6 +2248,7 @@ function TaskDrawer({
                   suffix=" мин"
                   value={estimate}
                   onChange={(value) => setEstimate(String(value))}
+                  disabled={!editing}
                 />
               </div>
               <div className="labels-field">
@@ -2139,8 +2264,9 @@ function TaskDrawer({
                     label: item.name,
                   }))}
                   nothingFoundMessage="Метки не найдены"
+                  disabled={!editing}
                 />
-                {canManage && (
+                {canManage && editing && (
                   <Popover width={300} position="bottom-start" shadow="md">
                     <Popover.Target>
                       <Button
@@ -2214,11 +2340,16 @@ function TaskDrawer({
                   value: column.id,
                   label: column.name,
                 }))}
+                disabled={!editing}
               />
               <Group justify="space-between" className="task-actions">
-                <Button type="submit" disabled={busy}>
-                  Сохранить изменения
-                </Button>
+                {editing ? (
+                  <Button type="submit" disabled={busy}>
+                    Сохранить изменения
+                  </Button>
+                ) : (
+                  <span />
+                )}
                 <Menu position="top-end">
                   <Menu.Target>
                     <ActionIcon
@@ -2249,6 +2380,16 @@ function TaskDrawer({
                         ? 'Восстановить задачу'
                         : 'Архивировать задачу'}
                     </Menu.Item>
+                    {canDelete && (
+                      <Menu.Item
+                        color="red"
+                        leftSection={<Trash2 size={16} />}
+                        disabled={busy}
+                        onClick={() => setConfirmDelete(true)}
+                      >
+                        Удалить задачу
+                      </Menu.Item>
+                    )}
                   </Menu.Dropdown>
                 </Menu>
               </Group>
@@ -2348,10 +2489,50 @@ function TaskDrawer({
             {error && <p role="alert">{error}</p>}
           </div>
         </Tabs.Panel>
+        <Tabs.Panel value="comments" pt="lg">
+          <TaskComments
+            boardId={data.board.id}
+            taskId={task.id}
+            archived={Boolean(task.archivedAt)}
+          />
+        </Tabs.Panel>
         <Tabs.Panel value="history" pt="lg">
           <TaskHistory boardId={data.board.id} taskId={task.id} />
         </Tabs.Panel>
       </Tabs>
+      <Modal
+        opened={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title="Удалить задачу?"
+        centered
+      >
+        <Stack>
+          <Text>
+            Задача «{task.title}», её комментарии, файлы и учёт времени будут
+            удалены без возможности восстановления.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setConfirmDelete(false)}>
+              Отмена
+            </Button>
+            <Button
+              color="red"
+              loading={busy}
+              onClick={() =>
+                void act(async () => {
+                  await api(`/boards/${data.board.id}/tasks/${task.id}`, {
+                    method: 'DELETE',
+                  });
+                  setConfirmDelete(false);
+                  close();
+                })
+              }
+            >
+              Удалить навсегда
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
       <Modal
         opened={!!previewAttachment}
         onClose={() => setPreviewAttachment(null)}
@@ -4254,6 +4435,7 @@ function Workspace({
         <TaskDrawer
           data={board.data}
           task={task}
+          currentUser={user}
           close={() => setOpen(null)}
           refresh={refresh}
         />

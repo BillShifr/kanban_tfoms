@@ -30,6 +30,7 @@ import {
   sessions,
   taskLabels,
   taskEvents,
+  taskComments,
   tasks,
   timeEntries,
   timeEntryCorrections,
@@ -189,6 +190,9 @@ const moveInput = z
     columnId: z.string().uuid(),
     beforeTaskId: z.string().uuid().nullable().optional(),
   })
+  .strict();
+const taskCommentInput = z
+  .object({ body: z.string().trim().min(1).max(4000) })
   .strict();
 type User = {
   id: string;
@@ -1314,6 +1318,139 @@ export async function buildApp() {
         toAssignee: assignee(event.toAssigneeId, event.toAssigneeName),
       })),
     };
+  });
+  app.get('/boards/:boardId/tasks/:taskId/comments', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      t = id(r, 'taskId');
+    if (!u) return;
+    if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+      return;
+    const task = (
+      await db
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(and(eq(tasks.id, t.data), eq(tasks.boardId, b.data)))
+        .limit(1)
+    )[0];
+    if (!task) return reply.code(404).send({ code: 'TASK_NOT_FOUND' });
+    const comments = await db
+      .select({
+        id: taskComments.id,
+        body: taskComments.body,
+        createdAt: taskComments.createdAt,
+        authorId: users.id,
+        authorEmail: users.email,
+        authorFirstName: users.firstName,
+        authorLastName: users.lastName,
+      })
+      .from(taskComments)
+      .innerJoin(users, eq(users.id, taskComments.authorId))
+      .where(eq(taskComments.taskId, t.data))
+      .orderBy(taskComments.createdAt, taskComments.id);
+    return {
+      comments: comments.map((comment) => ({
+        id: comment.id,
+        body: comment.body,
+        createdAt: comment.createdAt,
+        author: {
+          id: comment.authorId,
+          email: comment.authorEmail,
+          firstName: comment.authorFirstName,
+          lastName: comment.authorLastName,
+        },
+      })),
+    };
+  });
+  app.post('/boards/:boardId/tasks/:taskId/comments', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      t = id(r, 'taskId'),
+      p = taskCommentInput.safeParse(r.body);
+    if (!u) return;
+    if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+      return;
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    if (!(await activeTask(b.data, t.data)))
+      return reply.code(404).send({ code: 'TASK_NOT_FOUND' });
+    const comment = {
+      id: crypto.randomUUID(),
+      taskId: t.data,
+      authorId: u.id,
+      body: p.data.body,
+    };
+    await db.insert(taskComments).values(comment);
+    return reply.code(201).send({
+      comment: {
+        id: comment.id,
+        body: comment.body,
+        createdAt: new Date(),
+        author: {
+          id: u.id,
+          email: u.email,
+          firstName: u.firstName,
+          lastName: u.lastName,
+        },
+      },
+    });
+  });
+  app.delete('/boards/:boardId/tasks/:taskId', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      t = id(r, 'taskId');
+    if (!u) return;
+    if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+      return;
+    const client = await pool.connect();
+    let storagePaths: string[] = [];
+    try {
+      await client.query('BEGIN');
+      const task = await client.query<{ authorId: string }>(
+        `select author_id as "authorId"
+         from tasks
+         where id=$1 and board_id=$2
+         for update`,
+        [t.data, b.data],
+      );
+      if (!task.rows[0]) {
+        await client.query('ROLLBACK');
+        return reply.code(404).send({ code: 'TASK_NOT_FOUND' });
+      }
+      if (u.role !== 'superadmin' && task.rows[0].authorId !== u.id) {
+        await client.query('ROLLBACK');
+        return reply.code(403).send({ code: 'FORBIDDEN' });
+      }
+      storagePaths = (
+        await client.query<{ storagePath: string }>(
+          `select storage_path as "storagePath" from attachments where task_id=$1`,
+          [t.data],
+        )
+      ).rows.map((file) => file.storagePath);
+      await client.query(
+        `delete from time_entry_corrections
+         where time_entry_id in (select id from time_entries where task_id=$1)`,
+        [t.data],
+      );
+      await client.query(`delete from time_entries where task_id=$1`, [t.data]);
+      await client.query(`delete from tasks where id=$1`, [t.data]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    const cleanup = await Promise.allSettled(
+      storagePaths.map((storagePath) => unlink(storagePath)),
+    );
+    cleanup.forEach((result, index) => {
+      if (result.status === 'rejected')
+        app.log.warn(
+          { error: result.reason, storagePath: storagePaths[index] },
+          'Could not remove deleted task attachment',
+        );
+    });
+    return reply.code(204).send();
   });
   app.post('/boards/:boardId/tasks/:taskId/archive', async (r, reply) => {
     const u = await user(r, reply),
