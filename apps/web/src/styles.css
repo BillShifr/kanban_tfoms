@@ -705,10 +705,16 @@ a {
   background: transparent;
 }
 
-.task-drawer {
+.task-drawer,
+.task-modal {
   background: var(--app-surface);
 }
-.task-drawer-body {
+.task-modal-title {
+  overflow-wrap: anywhere;
+  padding-right: 12px;
+}
+.task-drawer-body,
+.task-modal-body {
   padding: 20px 24px 32px;
   display: grid;
   gap: 22px;
@@ -1364,7 +1370,8 @@ a {
     width: 100vw !important;
     max-width: 100vw !important;
   }
-  .task-drawer-body {
+  .task-drawer-body,
+  .task-modal-body {
     padding: 16px 16px 24px;
   }
   .property-grid,

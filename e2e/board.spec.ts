@@ -1279,6 +1279,7 @@ test.describe('core board workflow', () => {
     await page.getByRole('button', { name: 'Редактировать' }).click();
     await page.getByLabel('Описание').fill('Не сохранять это значение');
     await page.getByRole('button', { name: 'Отменить редактирование' }).click();
+    await page.getByRole('button', { name: 'Отбросить изменения' }).click();
     await expect(page.getByLabel('Описание')).toHaveValue(
       'Уточнённое описание',
     );
@@ -1294,6 +1295,12 @@ test.describe('core board workflow', () => {
     const drawer = page.getByRole('dialog', {
       name: 'Задача Задача для обсуждения',
     });
+    await expect(drawer).toHaveClass(/task-modal/);
+    const bounds = await drawer.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(
+      Math.abs(bounds!.x + bounds!.width / 2 - page.viewportSize()!.width / 2),
+    ).toBeLessThan(2);
     await expect(
       drawer.getByRole('textbox', { name: 'Название', exact: true }),
     ).toBeDisabled();
@@ -1305,6 +1312,22 @@ test.describe('core board workflow', () => {
     await page
       .getByLabel('Новый комментарий')
       .fill('Проверил постановку, можно брать в работу.');
+    await page.getByRole('tab', { name: 'История', exact: true }).click();
+    await page.getByRole('tab', { name: 'Комментарии' }).click();
+    await expect(page.getByLabel('Новый комментарий')).toHaveValue(
+      'Проверил постановку, можно брать в работу.',
+    );
+    await page
+      .getByRole('button', { name: 'Закрыть задачу', exact: true })
+      .click();
+    await expect(
+      page.getByRole('dialog', { name: 'Отменить несохранённые изменения?' }),
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeVisible();
+    await expect(
+      page.getByRole('dialog', { name: 'Отменить несохранённые изменения?' }),
+    ).toBeHidden();
     await page.getByRole('button', { name: 'Отправить комментарий' }).click();
     const comment = page.getByTestId('task-comment');
     await expect(comment).toContainText(email);
@@ -1312,6 +1335,22 @@ test.describe('core board workflow', () => {
       'Проверил постановку, можно брать в работу.',
     );
     await page.getByRole('tab', { name: 'Задача', exact: true }).click();
+    await page
+      .getByRole('button', { name: 'Редактировать', exact: true })
+      .click();
+    await drawer
+      .getByRole('textbox', { name: 'Название', exact: true })
+      .fill('Несохранённое название');
+    await page.getByRole('button', { name: 'Отменить редактирование' }).click();
+    await page.getByRole('button', { name: 'Продолжить работу' }).click();
+    await expect(
+      drawer.getByRole('textbox', { name: 'Название', exact: true }),
+    ).toHaveValue('Несохранённое название');
+    await page.getByRole('button', { name: 'Отменить редактирование' }).click();
+    await page.getByRole('button', { name: 'Отбросить изменения' }).click();
+    await expect(
+      drawer.getByRole('textbox', { name: 'Название', exact: true }),
+    ).toHaveValue('Задача для обсуждения');
     await page.getByRole('button', { name: 'Другие действия' }).click();
     await page.getByRole('menuitem', { name: 'Удалить задачу' }).click();
     await expect(
@@ -1520,7 +1559,10 @@ test.describe('core board workflow', () => {
     await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseTextAssignee(page, externalAssignee);
     await page.getByRole('button', { name: 'Сохранить изменения' }).click();
-    await page.keyboard.press('Escape');
+    await page
+      .getByRole('button', { name: 'Закрыть задачу', exact: true })
+      .click();
+    await expect(page.locator('.task-modal')).toBeHidden();
 
     const card = taskCard(page, title);
     await expect(
@@ -1637,6 +1679,15 @@ test.describe('core board workflow', () => {
     const download = page.waitForEvent('download');
     await preview.getByRole('link', { name: 'Скачать оригинал' }).click();
     expect((await download).suggestedFilename()).toBe('screen.png');
+    await page.keyboard.press('Escape');
+    await expect(preview).toBeHidden();
+    await expect(
+      page.getByRole('dialog', { name: 'Задача Задача с файлом' }),
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(
+      page.getByRole('dialog', { name: 'Задача Задача с файлом' }),
+    ).toBeHidden();
   });
 
   test('filters the board by author, assignee, topic, label, due state, and archive state', async ({

@@ -404,7 +404,7 @@ function AssigneeCombobox({
     combobox.closeDropdown();
   };
   return (
-    <Combobox store={combobox} onOptionSubmit={choose} withinPortal>
+    <Combobox store={combobox} onOptionSubmit={choose} withinPortal={false}>
       <Combobox.Target>
         <TextInput
           label="Исполнитель"
@@ -429,7 +429,7 @@ function AssigneeCombobox({
           rightSection={<Combobox.Chevron />}
         />
       </Combobox.Target>
-      <Combobox.Dropdown>
+      <Combobox.Dropdown style={{ maxHeight: 240, overflowY: 'auto' }}>
         <Combobox.Options>
           <Combobox.Option value="none:" active={!value}>
             Не назначен
@@ -1956,10 +1956,14 @@ function TaskComments({
   boardId,
   taskId,
   archived,
+  onDraftChange,
+  onBusyChange,
 }: {
   boardId: string;
   taskId: string;
   archived: boolean;
+  onDraftChange: (dirty: boolean) => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const comments = useQuery<{ comments: TaskComment[] }>({
       queryKey: ['task-comments', boardId, taskId],
@@ -1976,6 +1980,7 @@ function TaskComments({
             event.preventDefault();
             if (!body.trim()) return;
             setBusy(true);
+            onBusyChange(true);
             setError('');
             void api(`/boards/${boardId}/tasks/${taskId}/comments`, {
               method: 'POST',
@@ -1983,17 +1988,25 @@ function TaskComments({
             })
               .then(async () => {
                 setBody('');
+                onDraftChange(false);
                 await comments.refetch();
               })
               .catch((reason) => setError(err(reason)))
-              .finally(() => setBusy(false));
+              .finally(() => {
+                setBusy(false);
+                onBusyChange(false);
+              });
           }}
         >
           <Textarea
             label="Новый комментарий"
             placeholder="Напишите сообщение участникам задачи"
             value={body}
-            onChange={(event) => setBody(event.target.value)}
+            onChange={(event) => {
+              setBody(event.target.value);
+              onDraftChange(Boolean(event.target.value.trim()));
+            }}
+            disabled={busy}
             minRows={3}
             maxLength={4000}
             required
@@ -2029,7 +2042,7 @@ function TaskComments({
     </section>
   );
 }
-function TaskDrawer({
+function TaskModal({
   data,
   task,
   currentUser,
@@ -2042,7 +2055,11 @@ function TaskDrawer({
   close: () => void;
   refresh: () => Promise<unknown>;
 }) {
+  const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false),
+    [commentDirty, setCommentDirty] = useState(false),
+    [commentBusy, setCommentBusy] = useState(false),
+    [discardAction, setDiscardAction] = useState<'close' | 'edit' | null>(null),
     [confirmDelete, setConfirmDelete] = useState(false),
     [t, setT] = useState(task.title),
     [desc, setDesc] = useState(task.description ?? ''),
@@ -2068,6 +2085,25 @@ function TaskDrawer({
   const canManage = true,
     canDelete =
       currentUser.role === 'superadmin' || task.authorId === currentUser.id;
+  const draftDirty =
+    editing &&
+    (t !== task.title ||
+      desc !== (task.description ?? '') ||
+      assignee !== taskAssigneeKey(task) ||
+      topic !== (task.topicId ?? '') ||
+      JSON.stringify(labels) !==
+        JSON.stringify(
+          task.labelIds ?? task.labels?.map((label) => label.id) ?? [],
+        ) ||
+      due !== date(task.dueAt) ||
+      estimate !==
+        (task.estimatedMinutes ? String(task.estimatedMinutes) : ''));
+  const childOpened = confirmDelete || !!previewAttachment || !!discardAction;
+  const requestClose = () => {
+    if (busy || commentBusy || childOpened) return;
+    if (draftDirty || commentDirty) setDiscardAction('close');
+    else close();
+  };
   const resetDraft = () => {
     setT(task.title);
     setDesc(task.description ?? '');
@@ -2086,6 +2122,9 @@ function TaskDrawer({
     try {
       await f();
       await refresh();
+      await queryClient.invalidateQueries({
+        queryKey: ['task-history', data.board.id, task.id],
+      });
     } catch (x) {
       setError(err(x));
     } finally {
@@ -2116,11 +2155,18 @@ function TaskDrawer({
     });
   };
   return (
-    <MantineDrawer
+    <Modal
       opened
-      onClose={close}
-      position="right"
-      size={620}
+      onClose={requestClose}
+      centered
+      size={900}
+      trapFocus={!childOpened}
+      closeOnEscape={!childOpened && !busy && !commentBusy}
+      closeOnClickOutside={!childOpened && !busy && !commentBusy}
+      closeButtonProps={{
+        'aria-label': 'Закрыть задачу',
+        disabled: busy || commentBusy,
+      }}
       title={
         <div>
           <span className="eyebrow">
@@ -2130,7 +2176,11 @@ function TaskDrawer({
         </div>
       }
       overlayProps={{ backgroundOpacity: 0.55, blur: 2 }}
-      classNames={{ content: 'task-drawer', body: 'task-drawer-body' }}
+      classNames={{
+        content: 'task-modal',
+        body: 'task-modal-body',
+        title: 'task-modal-title',
+      }}
     >
       <Tabs defaultValue="details" keepMounted={false} className="task-tabs">
         <Tabs.List>
@@ -2148,8 +2198,12 @@ function TaskDrawer({
               <Button
                 variant={editing ? 'default' : 'light'}
                 leftSection={editing ? <X size={16} /> : <Pencil size={16} />}
-                onClick={() => (editing ? resetDraft() : setEditing(true))}
-                disabled={Boolean(task.archivedAt)}
+                onClick={() => {
+                  if (!editing) setEditing(true);
+                  else if (draftDirty) setDiscardAction('edit');
+                  else resetDraft();
+                }}
+                disabled={Boolean(task.archivedAt) || busy}
               >
                 {editing ? 'Отменить редактирование' : 'Редактировать'}
               </Button>
@@ -2220,6 +2274,7 @@ function TaskDrawer({
                 />
                 <Select
                   label="Тема"
+                  comboboxProps={{ withinPortal: false }}
                   placeholder="Без темы"
                   clearable
                   searchable
@@ -2233,6 +2288,7 @@ function TaskDrawer({
                 />
                 <DateInput
                   label="Срок"
+                  popoverProps={{ withinPortal: false }}
                   placeholder="Не указан"
                   dateParser={parseRussianDateInput}
                   value={due || null}
@@ -2254,6 +2310,7 @@ function TaskDrawer({
               <div className="labels-field">
                 <MultiSelect
                   label="Метки"
+                  comboboxProps={{ withinPortal: false }}
                   placeholder="Выберите метки"
                   searchable
                   clearable
@@ -2324,6 +2381,7 @@ function TaskDrawer({
               </div>
               <Select
                 label="Колонка"
+                comboboxProps={{ withinPortal: false }}
                 value={move}
                 onChange={(value) => {
                   if (!value) return;
@@ -2489,11 +2547,13 @@ function TaskDrawer({
             {error && <p role="alert">{error}</p>}
           </div>
         </Tabs.Panel>
-        <Tabs.Panel value="comments" pt="lg">
+        <Tabs.Panel value="comments" pt="lg" keepMounted>
           <TaskComments
             boardId={data.board.id}
             taskId={task.id}
             archived={Boolean(task.archivedAt)}
+            onDraftChange={setCommentDirty}
+            onBusyChange={setCommentBusy}
           />
         </Tabs.Panel>
         <Tabs.Panel value="history" pt="lg">
@@ -2501,8 +2561,43 @@ function TaskDrawer({
         </Tabs.Panel>
       </Tabs>
       <Modal
+        opened={!!discardAction}
+        onClose={() => setDiscardAction(null)}
+        title="Отменить несохранённые изменения?"
+        centered
+      >
+        <Stack>
+          <Text>
+            Несохранённые изменения
+            {discardAction === 'close' ? ' и черновик комментария' : ''} будут
+            потеряны.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setDiscardAction(null)}>
+              Продолжить работу
+            </Button>
+            <Button
+              color="red"
+              onClick={() => {
+                const action = discardAction;
+                setDiscardAction(null);
+                if (action === 'close') close();
+                else resetDraft();
+              }}
+            >
+              Отбросить изменения
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal
         opened={confirmDelete}
-        onClose={() => setConfirmDelete(false)}
+        onClose={() => {
+          if (!busy) setConfirmDelete(false);
+        }}
+        closeOnEscape={!busy}
+        closeOnClickOutside={!busy}
+        closeButtonProps={{ disabled: busy }}
         title="Удалить задачу?"
         centered
       >
@@ -2512,7 +2607,11 @@ function TaskDrawer({
             удалены без возможности восстановления.
           </Text>
           <Group justify="flex-end">
-            <Button variant="default" onClick={() => setConfirmDelete(false)}>
+            <Button
+              variant="default"
+              disabled={busy}
+              onClick={() => setConfirmDelete(false)}
+            >
               Отмена
             </Button>
             <Button
@@ -2561,7 +2660,7 @@ function TaskDrawer({
           </div>
         )}
       </Modal>
-    </MantineDrawer>
+    </Modal>
   );
 }
 function TimeView({ data, close }: { data: Payload; close: () => void }) {
@@ -3581,6 +3680,7 @@ function CreateBoardPopover({
           <Select
             label="Отдел"
             value={departmentId || null}
+            comboboxProps={{ withinPortal: false }}
             onChange={(value) => setDepartmentId(value ?? '')}
             data={departments.map((department) => ({
               value: department.id,
@@ -4432,7 +4532,8 @@ function Workspace({
         )}
       </section>
       {board.data && task && (
-        <TaskDrawer
+        <TaskModal
+          key={task.id}
           data={board.data}
           task={task}
           currentUser={user}
