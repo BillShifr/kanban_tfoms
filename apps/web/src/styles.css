@@ -725,13 +725,27 @@ a {
   font-weight: 750;
 }
 .task-modal-toolbar {
-  padding-bottom: 14px;
+  gap: 8px;
+}
+.task-navigation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   border-bottom: 1px solid var(--app-border);
+  padding-bottom: 12px;
+}
+.task-navigation > [role='tablist'] {
+  border-bottom: 0;
+}
+.task-more-actions {
+  order: 2;
 }
 .task-overview {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, 240px);
-  gap: 22px 28px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
 }
 .task-overview-tags {
   grid-column: 1 / -1;
@@ -781,8 +795,31 @@ a {
   background: var(--app-canvas);
   border-radius: 10px;
   display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-content: start;
   gap: 18px;
+}
+.task-modal .files-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  align-items: center;
+  gap: 12px 20px;
+  padding-top: 18px;
+}
+.task-modal .files-section .file-list {
+  grid-column: 1;
+  grid-row: 2;
+}
+.task-modal .files-section > .mantine-FileInput-root {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+.task-modal .files-section .task-overview-empty {
+  margin: 0;
+}
+.task-modal .task-comments {
+  border-top: 1px solid var(--app-border);
+  padding-top: 20px;
 }
 .task-overview-meta dt {
   font-size: 12px;
@@ -816,6 +853,13 @@ a {
   font-weight: 600;
 }
 @media (max-width: 640px) {
+  .task-modal .files-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .task-modal .files-section > .mantine-FileInput-root {
+    grid-column: 1;
+    grid-row: auto;
+  }
   .task-modal-heading {
     font-size: 18px;
   }
