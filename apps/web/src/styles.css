@@ -463,6 +463,10 @@ a {
   border-color: var(--app-accent);
   background: color-mix(in srgb, var(--app-accent-soft) 35%, var(--app-column));
 }
+.column > * {
+  /* A dense column must scroll, never shrink cards below their contents. */
+  flex-shrink: 0;
+}
 .column > header {
   min-height: 30px;
   padding: 0 2px;
@@ -586,6 +590,7 @@ a {
   background: transparent;
   color: var(--app-text);
   text-align: left;
+  overflow-wrap: anywhere;
 }
 .card-drag-handle {
   position: absolute;
