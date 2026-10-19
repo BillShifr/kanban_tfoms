@@ -2164,6 +2164,7 @@ function TaskModal({
 }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false),
+    [taskTab, setTaskTab] = useState<string | null>('details'),
     [commentDirty, setCommentDirty] = useState(false),
     [commentBusy, setCommentBusy] = useState(false),
     [discardAction, setDiscardAction] = useState<'close' | 'edit' | null>(null),
@@ -2289,71 +2290,81 @@ function TaskModal({
         title: 'task-modal-title',
       }}
     >
-      <Tabs defaultValue="details" keepMounted={false} className="task-tabs">
-        <Tabs.List>
-          <Tabs.Tab value="details">Задача</Tabs.Tab>
-          <Tabs.Tab value="history" leftSection={<HistoryIcon size={15} />}>
-            История
-          </Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="details" pt="lg" keepMounted>
-          <div className="task-details">
-            <Group justify="space-between" className="task-modal-toolbar">
-              <Menu position="top-end">
-                <Menu.Target>
-                  <ActionIcon
-                    variant="subtle"
-                    color="gray"
-                    size="lg"
-                    aria-label="Другие действия"
-                  >
-                    <MoreHorizontal size={20} />
-                  </ActionIcon>
-                </Menu.Target>
-                <Menu.Dropdown>
+      <Tabs
+        value={taskTab}
+        onChange={setTaskTab}
+        keepMounted={false}
+        className="task-tabs"
+      >
+        <div className="task-navigation">
+          <Tabs.List>
+            <Tabs.Tab value="details">Задача</Tabs.Tab>
+            <Tabs.Tab value="history" leftSection={<HistoryIcon size={15} />}>
+              История
+            </Tabs.Tab>
+          </Tabs.List>
+          <Group justify="flex-end" gap="xs" className="task-modal-toolbar">
+            <Menu position="bottom-end" withinPortal={false}>
+              <Menu.Target>
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  size="lg"
+                  aria-label="Другие действия"
+                  className="task-more-actions"
+                >
+                  <MoreHorizontal size={20} />
+                </ActionIcon>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item
+                  color="red"
+                  leftSection={<Archive size={16} />}
+                  disabled={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      await api(
+                        `/boards/${data.board.id}/tasks/${task.id}/${task.archivedAt ? 'restore' : 'archive'}`,
+                        { method: 'POST' },
+                      );
+                      close();
+                    })
+                  }
+                >
+                  {task.archivedAt
+                    ? 'Восстановить задачу'
+                    : 'Архивировать задачу'}
+                </Menu.Item>
+                {canDelete && (
                   <Menu.Item
                     color="red"
-                    leftSection={<Archive size={16} />}
+                    leftSection={<Trash2 size={16} />}
                     disabled={busy}
-                    onClick={() =>
-                      void act(async () => {
-                        await api(
-                          `/boards/${data.board.id}/tasks/${task.id}/${task.archivedAt ? 'restore' : 'archive'}`,
-                          { method: 'POST' },
-                        );
-                        close();
-                      })
-                    }
+                    onClick={() => setConfirmDelete(true)}
                   >
-                    {task.archivedAt
-                      ? 'Восстановить задачу'
-                      : 'Архивировать задачу'}
+                    Удалить задачу
                   </Menu.Item>
-                  {canDelete && (
-                    <Menu.Item
-                      color="red"
-                      leftSection={<Trash2 size={16} />}
-                      disabled={busy}
-                      onClick={() => setConfirmDelete(true)}
-                    >
-                      Удалить задачу
-                    </Menu.Item>
-                  )}
-                </Menu.Dropdown>
-              </Menu>
-              <Button
-                variant={editing ? 'default' : 'light'}
-                leftSection={editing ? <X size={16} /> : <Pencil size={16} />}
-                onClick={() => {
-                  if (!editing) setEditing(true);
-                  else if (draftDirty) setDiscardAction('edit');
-                  else resetDraft();
-                }}
-                disabled={Boolean(task.archivedAt) || busy}
-              >
-                {editing ? 'Отменить редактирование' : 'Редактировать'}
-              </Button>
-            </Group>
+                )}
+              </Menu.Dropdown>
+            </Menu>
+            <Button
+              variant={editing ? 'default' : 'light'}
+              leftSection={editing ? <X size={16} /> : <Pencil size={16} />}
+              onClick={() => {
+                if (!editing) {
+                  setTaskTab('details');
+                  setEditing(true);
+                } else if (draftDirty) setDiscardAction('edit');
+                else resetDraft();
+              }}
+              disabled={Boolean(task.archivedAt) || busy}
+            >
+              {editing ? 'Отменить редактирование' : 'Редактировать'}
+            </Button>
+          </Group>
+        </div>
+        <Tabs.Panel value="details" pt="lg" keepMounted>
+          <div className="task-details">
             {!editing && <TaskOverview task={task} data={data} />}
             {editing && (
               <form className="task-form" onSubmit={save}>

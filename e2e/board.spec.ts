@@ -1367,6 +1367,20 @@ test.describe('core board workflow', () => {
       }),
     ).toBeVisible();
     await page.getByRole('button', { name: 'Другие действия' }).click();
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    await expect
+      .poll(async () => {
+        const modalBox = await drawer.boundingBox();
+        const menuBox = await menu.boundingBox();
+        return Boolean(
+          modalBox &&
+          menuBox &&
+          menuBox.x >= modalBox.x &&
+          menuBox.x + menuBox.width <= modalBox.x + modalBox.width,
+        );
+      })
+      .toBe(true);
     await page.getByRole('menuitem', { name: 'Удалить задачу' }).click();
     await expect(
       page.getByRole('dialog', { name: 'Удалить задачу?' }),
