@@ -269,6 +269,29 @@ export const taskEvents = pgTable(
     ),
   ],
 );
+export const taskComments = pgTable(
+  'task_comments',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    authorId: uuid('author_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('task_comments_task_created_idx').on(t.taskId, t.createdAt, t.id),
+    check(
+      'task_comments_body_check',
+      sql`${t.body} = btrim(${t.body}) AND char_length(${t.body}) BETWEEN 1 AND 4000`,
+    ),
+  ],
+);
 export const attachments = pgTable(
   'attachments',
   {

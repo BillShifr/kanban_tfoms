@@ -186,6 +186,12 @@ type TaskEvent = {
     | { name: string }
     | null;
 };
+type TaskComment = {
+  id: string;
+  body: string;
+  createdAt: string;
+  author: Person;
+};
 const taskCollisionDetection: CollisionDetection = (args) => {
   const droppableContainers = args.droppableContainers.filter(
       (container) => container.id !== args.active.id,
@@ -353,10 +359,12 @@ function AssigneeCombobox({
   members,
   value,
   onChange,
+  disabled = false,
 }: {
   members: Person[];
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   const combobox = useCombobox({
       onDropdownClose: () => combobox.resetSelectedOption(),
@@ -395,7 +403,7 @@ function AssigneeCombobox({
     combobox.closeDropdown();
   };
   return (
-    <Combobox store={combobox} onOptionSubmit={choose} withinPortal>
+    <Combobox store={combobox} onOptionSubmit={choose} withinPortal={false}>
       <Combobox.Target>
         <TextInput
           label="Исполнитель"
@@ -416,10 +424,11 @@ function AssigneeCombobox({
             combobox.selectFirstOption();
           }}
           maxLength={120}
+          disabled={disabled}
           rightSection={<Combobox.Chevron />}
         />
       </Combobox.Target>
-      <Combobox.Dropdown>
+      <Combobox.Dropdown style={{ maxHeight: 240, overflowY: 'auto' }}>
         <Combobox.Options>
           <Combobox.Option value="none:" active={!value}>
             Не назначен
@@ -1942,18 +1951,224 @@ function TaskHistory({ boardId, taskId }: { boardId: string; taskId: string }) {
     </ol>
   );
 }
-function TaskDrawer({
+function TaskComments({
+  boardId,
+  taskId,
+  archived,
+  onDraftChange,
+  onBusyChange,
+}: {
+  boardId: string;
+  taskId: string;
+  archived: boolean;
+  onDraftChange: (dirty: boolean) => void;
+  onBusyChange: (busy: boolean) => void;
+}) {
+  const comments = useQuery<{ comments: TaskComment[] }>({
+      queryKey: ['task-comments', boardId, taskId],
+      queryFn: () => api(`/boards/${boardId}/tasks/${taskId}/comments`),
+    }),
+    [body, setBody] = useState(''),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState('');
+  return (
+    <section className="task-comments" aria-label="Обсуждение задачи">
+      <div className="section-heading">
+        <div>
+          <h2>Обсуждение</h2>
+          <p>Уточнения, решения и результаты работы по задаче</p>
+        </div>
+        {comments.data && (
+          <Badge variant="light">{comments.data.comments.length}</Badge>
+        )}
+      </div>
+      {archived && (
+        <Text size="sm" c="dimmed">
+          Задача в архиве. Обсуждение доступно для чтения.
+        </Text>
+      )}
+      {!archived && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!body.trim()) return;
+            setBusy(true);
+            onBusyChange(true);
+            setError('');
+            void api(`/boards/${boardId}/tasks/${taskId}/comments`, {
+              method: 'POST',
+              body: JSON.stringify({ body: body.trim() }),
+            })
+              .then(async () => {
+                setBody('');
+                onDraftChange(false);
+                await comments.refetch();
+              })
+              .catch((reason) => setError(err(reason)))
+              .finally(() => {
+                setBusy(false);
+                onBusyChange(false);
+              });
+          }}
+        >
+          <Textarea
+            label="Новый комментарий"
+            placeholder="Напишите сообщение участникам задачи"
+            value={body}
+            onChange={(event) => {
+              setBody(event.target.value);
+              onDraftChange(Boolean(event.target.value.trim()));
+            }}
+            disabled={busy}
+            minRows={3}
+            maxLength={4000}
+            required
+          />
+          <Button type="submit" loading={busy} disabled={!body.trim()}>
+            Отправить комментарий
+          </Button>
+        </form>
+      )}
+      {error && <p role="alert">{error}</p>}
+      {comments.isLoading ? (
+        <Skeleton height={80} />
+      ) : comments.isError ? (
+        <div role="alert">
+          <Text>Не удалось загрузить комментарии.</Text>
+          <Button variant="subtle" onClick={() => void comments.refetch()}>
+            Повторить загрузку
+          </Button>
+        </div>
+      ) : comments.data?.comments.length ? (
+        <ol aria-label="Комментарии к задаче">
+          {comments.data.comments.map((comment) => (
+            <li key={comment.id} data-testid="task-comment">
+              <div>
+                <strong>{personLabel(comment.author)}</strong>
+                <time dateTime={comment.createdAt}>
+                  {new Intl.DateTimeFormat('ru-RU', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  }).format(new Date(comment.createdAt))}
+                </time>
+              </div>
+              <p>{comment.body}</p>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="empty-state">Комментариев пока нет</p>
+      )}
+    </section>
+  );
+}
+function TaskOverview({ task, data }: { task: Task; data: Payload }) {
+  const assignee = data.members?.find(
+    (member) => member.id === task.assigneeId,
+  );
+  const topic = data.topics?.find((item) => item.id === task.topicId);
+  const taskLabels =
+    task.labels ??
+    data.labels?.filter((item) => task.labelIds?.includes(item.id)) ??
+    [];
+  return (
+    <article className="task-overview" aria-label="Содержание задачи">
+      <div className="task-overview-tags">
+        <Badge variant="light">
+          {data.columns.find((column) => column.id === task.columnId)?.name ??
+            'Колонка недоступна'}
+        </Badge>
+        {task.archivedAt && (
+          <Badge color="gray" variant="outline">
+            В архиве
+          </Badge>
+        )}
+        {topic && (
+          <span className="task-overview-tag">
+            <span style={{ background: topic.color ?? '#64748b' }} />
+            {topic.name}
+          </span>
+        )}
+        {taskLabels.map((label) => (
+          <span className="task-overview-tag" key={label.id}>
+            <span style={{ background: label.color ?? '#64748b' }} />
+            {label.name}
+          </span>
+        ))}
+      </div>
+      <section
+        aria-label="Описание задачи"
+        className="task-overview-description"
+      >
+        <h2>Описание</h2>
+        <p className={task.description?.trim() ? '' : 'task-overview-empty'}>
+          {task.description?.trim()
+            ? task.description
+            : 'Описание пока не добавлено.'}
+        </p>
+      </section>
+      <dl className="task-overview-meta">
+        <div>
+          <dt>Исполнитель</dt>
+          <dd>
+            {assignee
+              ? personLabel(assignee)
+              : task.assigneeName ||
+                (task.assigneeId ? 'Участник недоступен' : 'Не назначен')}
+          </dd>
+        </div>
+        <div aria-label="Автор задачи">
+          <dt>Автор задачи</dt>
+          <dd>{personLabel(task.author)}</dd>
+        </div>
+        <div>
+          <dt>Срок</dt>
+          <dd>
+            {task.dueAt ? (
+              <time dateTime={date(task.dueAt)}>
+                {new Intl.DateTimeFormat('ru-RU', {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                }).format(new Date(`${date(task.dueAt)}T12:00:00`))}
+              </time>
+            ) : (
+              'Без срока'
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Оценка времени</dt>
+          <dd>
+            {task.estimatedMinutes != null
+              ? `${task.estimatedMinutes} мин`
+              : 'Не задана'}
+          </dd>
+        </div>
+      </dl>
+    </article>
+  );
+}
+function TaskModal({
   data,
   task,
+  currentUser,
   close,
   refresh,
 }: {
   data: Payload;
   task: Task;
+  currentUser: User;
   close: () => void;
   refresh: () => Promise<unknown>;
 }) {
-  const [t, setT] = useState(task.title),
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false),
+    [commentDirty, setCommentDirty] = useState(false),
+    [commentBusy, setCommentBusy] = useState(false),
+    [discardAction, setDiscardAction] = useState<'close' | 'edit' | null>(null),
+    [confirmDelete, setConfirmDelete] = useState(false),
+    [t, setT] = useState(task.title),
     [desc, setDesc] = useState(task.description ?? ''),
     [assignee, setAssignee] = useState(taskAssigneeKey(task)),
     [topic, setTopic] = useState(task.topicId ?? ''),
@@ -1974,13 +2189,49 @@ function TaskDrawer({
     ),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
-  const canManage = true;
+  const canManage = true,
+    canDelete =
+      currentUser.role === 'superadmin' || task.authorId === currentUser.id;
+  const draftDirty =
+    editing &&
+    (t !== task.title ||
+      desc !== (task.description ?? '') ||
+      assignee !== taskAssigneeKey(task) ||
+      topic !== (task.topicId ?? '') ||
+      JSON.stringify(labels) !==
+        JSON.stringify(
+          task.labelIds ?? task.labels?.map((label) => label.id) ?? [],
+        ) ||
+      due !== date(task.dueAt) ||
+      estimate !==
+        (task.estimatedMinutes ? String(task.estimatedMinutes) : ''));
+  const childOpened = confirmDelete || !!previewAttachment || !!discardAction;
+  const requestClose = () => {
+    if (busy || commentBusy || childOpened) return;
+    if (draftDirty || commentDirty) setDiscardAction('close');
+    else close();
+  };
+  const resetDraft = () => {
+    setT(task.title);
+    setDesc(task.description ?? '');
+    setAssignee(taskAssigneeKey(task));
+    setTopic(task.topicId ?? '');
+    setLabels(task.labelIds ?? task.labels?.map((label) => label.id) ?? []);
+    setDue(date(task.dueAt));
+    setEstimate(task.estimatedMinutes ? String(task.estimatedMinutes) : '');
+    setMove(task.columnId);
+    setEditing(false);
+    setError('');
+  };
   const act = async (f: () => Promise<unknown>) => {
     setBusy(true);
     setError('');
     try {
       await f();
       await refresh();
+      await queryClient.invalidateQueries({
+        queryKey: ['task-history', data.board.id, task.id],
+      });
     } catch (x) {
       setError(err(x));
     } finally {
@@ -1994,8 +2245,8 @@ function TaskDrawer({
       : assignee.startsWith('text:')
         ? { assigneeName: assignee.slice(5) }
         : { assigneeId: null };
-    return act(() =>
-      api(`/boards/${data.board.id}/tasks/${task.id}`, {
+    return act(async () => {
+      await api(`/boards/${data.board.id}/tasks/${task.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           title: t,
@@ -2006,25 +2257,37 @@ function TaskDrawer({
           dueAt: due || null,
           estimatedMinutes: estimate ? Number(estimate) : null,
         }),
-      }),
-    );
+      });
+      setEditing(false);
+    });
   };
   return (
-    <MantineDrawer
+    <Modal
       opened
-      onClose={close}
-      position="right"
-      size={620}
+      onClose={requestClose}
+      centered
+      size={900}
+      trapFocus={!childOpened}
+      closeOnEscape={!childOpened && !busy && !commentBusy}
+      closeOnClickOutside={!childOpened && !busy && !commentBusy}
+      closeButtonProps={{
+        'aria-label': 'Закрыть задачу',
+        disabled: busy || commentBusy,
+      }}
       title={
         <div>
           <span className="eyebrow">
             {task.archivedAt ? 'Архивная задача' : 'Задача'}
           </span>
-          <strong>{task.title}</strong>
+          <h1 className="task-modal-heading">{task.title}</h1>
         </div>
       }
       overlayProps={{ backgroundOpacity: 0.55, blur: 2 }}
-      classNames={{ content: 'task-drawer', body: 'task-drawer-body' }}
+      classNames={{
+        content: 'task-modal',
+        body: 'task-modal-body',
+        title: 'task-modal-title',
+      }}
     >
       <Tabs defaultValue="details" keepMounted={false} className="task-tabs">
         <Tabs.List>
@@ -2033,269 +2296,232 @@ function TaskDrawer({
             История
           </Tabs.Tab>
         </Tabs.List>
-        <Tabs.Panel value="details" pt="lg">
+        <Tabs.Panel value="details" pt="lg" keepMounted>
           <div className="task-details">
-            <section className="timer-panel" aria-label="Учёт времени">
-              <div>
-                <span>Затрачено</span>
-                <strong>{duration(task.timeSeconds)}</strong>
-              </div>
-              {task.activeTimer ? (
-                <Button
-                  color="red"
-                  leftSection={<Timer size={17} />}
-                  disabled={busy}
-                  onClick={() =>
-                    void act(() =>
-                      api(`/time-entries/${task.activeTimer!.id}/stop`, {
-                        method: 'POST',
-                      }),
-                    )
-                  }
-                >
-                  Остановить таймер
-                </Button>
-              ) : (
-                <Button
-                  variant="light"
-                  leftSection={<Timer size={17} />}
-                  disabled={busy || !!task.archivedAt}
-                  onClick={() =>
-                    void act(() =>
-                      api(`/tasks/${task.id}/timer/start`, { method: 'POST' }),
-                    )
-                  }
-                >
-                  Запустить таймер
-                </Button>
-              )}
-            </section>
-            <section className="task-author" aria-label="Автор задачи">
-              <span>Автор задачи</span>
-              <strong>{personLabel(task.author)}</strong>
-            </section>
-            <form className="task-form" onSubmit={save}>
-              <TextInput
-                label="Название"
-                value={t}
-                onChange={(e) => setT(e.target.value)}
-                required
-              />
-              <Textarea
-                label="Описание"
-                value={desc}
-                onChange={(e) => setDesc(e.target.value)}
-                placeholder="Опишите задачу"
-                autosize
-                minRows={5}
-                maxRows={12}
-              />
-              <div className="property-grid">
-                <AssigneeCombobox
-                  members={data.members ?? []}
-                  value={assignee}
-                  onChange={setAssignee}
-                />
-                <Select
-                  label="Тема"
-                  placeholder="Без темы"
-                  clearable
-                  searchable
-                  value={topic || null}
-                  onChange={(value) => setTopic(value ?? '')}
-                  data={(data.topics ?? []).map((item) => ({
-                    value: item.id,
-                    label: item.name,
-                  }))}
-                />
-                <DateInput
-                  label="Срок"
-                  placeholder="Не указан"
-                  dateParser={parseRussianDateInput}
-                  value={due || null}
-                  onChange={(value) => setDue(value ?? '')}
-                  valueFormat="DD.MM.YYYY"
-                  clearable
-                />
-                <NumberInput
-                  label="Оценка времени"
-                  placeholder="В минутах"
-                  min={1}
-                  suffix=" мин"
-                  value={estimate}
-                  onChange={(value) => setEstimate(String(value))}
-                />
-              </div>
-              <div className="labels-field">
-                <MultiSelect
-                  label="Метки"
-                  placeholder="Выберите метки"
-                  searchable
-                  clearable
-                  value={labels}
-                  onChange={setLabels}
-                  data={(data.labels ?? []).map((item) => ({
-                    value: item.id,
-                    label: item.name,
-                  }))}
-                  nothingFoundMessage="Метки не найдены"
-                />
-                {canManage && (
-                  <Popover width={300} position="bottom-start" shadow="md">
-                    <Popover.Target>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        leftSection={<Plus size={15} />}
-                      >
-                        Создать метку
-                      </Button>
-                    </Popover.Target>
-                    <Popover.Dropdown>
-                      <Stack gap="sm">
-                        <Text fw={650} size="sm">
-                          Новая метка
-                        </Text>
-                        <TextInput
-                          label="Название"
-                          value={labelName}
-                          onChange={(event) => setLabelName(event.target.value)}
-                        />
-                        <ColorInput
-                          label="Цвет"
-                          value={labelColor}
-                          onChange={setLabelColor}
-                          format="hex"
-                        />
-                        <Button
-                          disabled={!labelName.trim()}
-                          onClick={() =>
-                            void act(async () => {
-                              const created = await api<{ label: Tag }>(
-                                `/boards/${data.board.id}/labels`,
-                                {
-                                  method: 'POST',
-                                  body: JSON.stringify({
-                                    name: labelName.trim(),
-                                    color: labelColor,
-                                  }),
-                                },
-                              );
-                              setLabels((current) => [
-                                ...current,
-                                created.label.id,
-                              ]);
-                              setLabelName('');
-                            })
-                          }
-                        >
-                          Создать и выбрать
-                        </Button>
-                      </Stack>
-                    </Popover.Dropdown>
-                  </Popover>
-                )}
-              </div>
-              <Select
-                label="Колонка"
-                value={move}
-                onChange={(value) => {
-                  if (!value) return;
-                  setMove(value);
-                  if (value !== task.columnId)
-                    void act(() =>
-                      api(`/boards/${data.board.id}/tasks/${task.id}/move`, {
-                        method: 'POST',
-                        body: JSON.stringify({ columnId: value }),
-                      }),
-                    );
-                }}
-                data={data.columns.map((column) => ({
-                  value: column.id,
-                  label: column.name,
-                }))}
-              />
-              <Group justify="space-between" className="task-actions">
-                <Button type="submit" disabled={busy}>
-                  Сохранить изменения
-                </Button>
-                <Menu position="top-end">
-                  <Menu.Target>
-                    <ActionIcon
-                      variant="subtle"
-                      color="gray"
-                      size="lg"
-                      aria-label="Другие действия"
-                    >
-                      <MoreHorizontal size={20} />
-                    </ActionIcon>
-                  </Menu.Target>
-                  <Menu.Dropdown>
+            <Group justify="space-between" className="task-modal-toolbar">
+              <Menu position="top-end">
+                <Menu.Target>
+                  <ActionIcon
+                    variant="subtle"
+                    color="gray"
+                    size="lg"
+                    aria-label="Другие действия"
+                  >
+                    <MoreHorizontal size={20} />
+                  </ActionIcon>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item
+                    color="red"
+                    leftSection={<Archive size={16} />}
+                    disabled={busy}
+                    onClick={() =>
+                      void act(async () => {
+                        await api(
+                          `/boards/${data.board.id}/tasks/${task.id}/${task.archivedAt ? 'restore' : 'archive'}`,
+                          { method: 'POST' },
+                        );
+                        close();
+                      })
+                    }
+                  >
+                    {task.archivedAt
+                      ? 'Восстановить задачу'
+                      : 'Архивировать задачу'}
+                  </Menu.Item>
+                  {canDelete && (
                     <Menu.Item
                       color="red"
-                      leftSection={<Archive size={16} />}
+                      leftSection={<Trash2 size={16} />}
                       disabled={busy}
-                      onClick={() =>
-                        void act(async () => {
-                          await api(
-                            `/boards/${data.board.id}/tasks/${task.id}/${task.archivedAt ? 'restore' : 'archive'}`,
-                            { method: 'POST' },
-                          );
-                          close();
-                        })
-                      }
+                      onClick={() => setConfirmDelete(true)}
                     >
-                      {task.archivedAt
-                        ? 'Восстановить задачу'
-                        : 'Архивировать задачу'}
+                      Удалить задачу
                     </Menu.Item>
-                  </Menu.Dropdown>
-                </Menu>
-              </Group>
-            </form>
-            <section className="manual-time">
-              <div className="section-heading">
-                <div>
-                  <h2>Добавить время вручную</h2>
-                  <p>Если работа выполнялась без запущенного таймера</p>
-                </div>
-              </div>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void act(async () => {
-                    await api(`/tasks/${task.id}/time-entries/manual`, {
-                      method: 'POST',
-                      body: JSON.stringify({ minutes: Number(mins), workDate }),
-                    });
-                    setMins('');
-                  });
+                  )}
+                </Menu.Dropdown>
+              </Menu>
+              <Button
+                variant={editing ? 'default' : 'light'}
+                leftSection={editing ? <X size={16} /> : <Pencil size={16} />}
+                onClick={() => {
+                  if (!editing) setEditing(true);
+                  else if (draftDirty) setDiscardAction('edit');
+                  else resetDraft();
                 }}
+                disabled={Boolean(task.archivedAt) || busy}
               >
-                <div className="manual-time-grid">
-                  <NumberInput
-                    label="Продолжительность"
-                    min={1}
-                    max={1440}
-                    suffix=" мин"
-                    value={mins}
-                    onChange={(value) => setMins(String(value))}
-                    required
+                {editing ? 'Отменить редактирование' : 'Редактировать'}
+              </Button>
+            </Group>
+            {!editing && <TaskOverview task={task} data={data} />}
+            {editing && (
+              <form className="task-form" onSubmit={save}>
+                <TextInput
+                  label="Название"
+                  value={t}
+                  onChange={(e) => setT(e.target.value)}
+                  required
+                  disabled={!editing}
+                />
+                <Textarea
+                  label="Описание"
+                  value={desc}
+                  onChange={(e) => setDesc(e.target.value)}
+                  placeholder="Опишите задачу"
+                  autosize
+                  minRows={5}
+                  maxRows={12}
+                  disabled={!editing}
+                />
+                <div className="property-grid">
+                  <AssigneeCombobox
+                    members={data.members ?? []}
+                    value={assignee}
+                    onChange={setAssignee}
+                    disabled={!editing}
+                  />
+                  <Select
+                    label="Тема"
+                    comboboxProps={{ withinPortal: false }}
+                    placeholder="Без темы"
+                    clearable
+                    searchable
+                    value={topic || null}
+                    onChange={(value) => setTopic(value ?? '')}
+                    data={(data.topics ?? []).map((item) => ({
+                      value: item.id,
+                      label: item.name,
+                    }))}
+                    disabled={!editing}
                   />
                   <DateInput
-                    label="Дата работы"
+                    label="Срок"
+                    popoverProps={{ withinPortal: false }}
+                    placeholder="Не указан"
                     dateParser={parseRussianDateInput}
-                    value={workDate}
-                    onChange={(value) => setWorkDate(value ?? '')}
+                    value={due || null}
+                    onChange={(value) => setDue(value ?? '')}
                     valueFormat="DD.MM.YYYY"
-                    required
+                    clearable
+                    disabled={!editing}
                   />
-                  <Button type="submit" disabled={busy}>
-                    Добавить время
-                  </Button>
+                  <NumberInput
+                    label="Оценка времени"
+                    placeholder="В минутах"
+                    min={1}
+                    suffix=" мин"
+                    value={estimate}
+                    onChange={(value) => setEstimate(String(value))}
+                    disabled={!editing}
+                  />
                 </div>
+                <div className="labels-field">
+                  <MultiSelect
+                    label="Метки"
+                    comboboxProps={{ withinPortal: false }}
+                    placeholder="Выберите метки"
+                    searchable
+                    clearable
+                    value={labels}
+                    onChange={setLabels}
+                    data={(data.labels ?? []).map((item) => ({
+                      value: item.id,
+                      label: item.name,
+                    }))}
+                    nothingFoundMessage="Метки не найдены"
+                    disabled={!editing}
+                  />
+                  {canManage && editing && (
+                    <Popover width={300} position="bottom-start" shadow="md">
+                      <Popover.Target>
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          leftSection={<Plus size={15} />}
+                        >
+                          Создать метку
+                        </Button>
+                      </Popover.Target>
+                      <Popover.Dropdown>
+                        <Stack gap="sm">
+                          <Text fw={650} size="sm">
+                            Новая метка
+                          </Text>
+                          <TextInput
+                            label="Название"
+                            value={labelName}
+                            onChange={(event) =>
+                              setLabelName(event.target.value)
+                            }
+                          />
+                          <ColorInput
+                            label="Цвет"
+                            value={labelColor}
+                            onChange={setLabelColor}
+                            format="hex"
+                          />
+                          <Button
+                            disabled={!labelName.trim()}
+                            onClick={() =>
+                              void act(async () => {
+                                const created = await api<{ label: Tag }>(
+                                  `/boards/${data.board.id}/labels`,
+                                  {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                      name: labelName.trim(),
+                                      color: labelColor,
+                                    }),
+                                  },
+                                );
+                                setLabels((current) => [
+                                  ...current,
+                                  created.label.id,
+                                ]);
+                                setLabelName('');
+                              })
+                            }
+                          >
+                            Создать и выбрать
+                          </Button>
+                        </Stack>
+                      </Popover.Dropdown>
+                    </Popover>
+                  )}
+                </div>
+                <Select
+                  label="Колонка"
+                  comboboxProps={{ withinPortal: false }}
+                  value={move}
+                  onChange={(value) => {
+                    if (!value) return;
+                    setMove(value);
+                    if (value !== task.columnId)
+                      void act(() =>
+                        api(`/boards/${data.board.id}/tasks/${task.id}/move`, {
+                          method: 'POST',
+                          body: JSON.stringify({ columnId: value }),
+                        }),
+                      );
+                  }}
+                  data={data.columns.map((column) => ({
+                    value: column.id,
+                    label: column.name,
+                  }))}
+                  disabled={!editing}
+                />
+                <Group justify="space-between" className="task-actions">
+                  {editing ? (
+                    <Button type="submit" disabled={busy}>
+                      Сохранить изменения
+                    </Button>
+                  ) : (
+                    <span />
+                  )}
+                </Group>
               </form>
-            </section>
+            )}
             <section className="files-section">
               <div className="section-heading">
                 <div>
@@ -2304,6 +2530,11 @@ function TaskDrawer({
                 </div>
               </div>
               <div className="file-list">
+                {!task.attachments?.length && (
+                  <p className="task-overview-empty">
+                    Файлы пока не прикреплены.
+                  </p>
+                )}
                 {task.attachments?.map((attachment) => {
                   const url = `/api/attachments/${attachment.id}`;
                   return (
@@ -2345,6 +2576,90 @@ function TaskDrawer({
                 }}
               />
             </section>
+            <TaskComments
+              boardId={data.board.id}
+              taskId={task.id}
+              archived={Boolean(task.archivedAt)}
+              onDraftChange={setCommentDirty}
+              onBusyChange={setCommentBusy}
+            />
+            <div className="task-time-section">
+              <section className="timer-panel" aria-label="Учёт времени">
+                <div>
+                  <span>Затрачено</span>
+                  <strong>{duration(task.timeSeconds)}</strong>
+                </div>
+                {task.activeTimer ? (
+                  <Button
+                    color="red"
+                    leftSection={<Timer size={17} />}
+                    disabled={busy}
+                    onClick={() =>
+                      void act(() =>
+                        api(`/time-entries/${task.activeTimer!.id}/stop`, {
+                          method: 'POST',
+                        }),
+                      )
+                    }
+                  >
+                    Остановить таймер
+                  </Button>
+                ) : (
+                  <Button
+                    variant="light"
+                    leftSection={<Timer size={17} />}
+                    disabled={busy || !!task.archivedAt}
+                    onClick={() =>
+                      void act(() =>
+                        api(`/tasks/${task.id}/timer/start`, {
+                          method: 'POST',
+                        }),
+                      )
+                    }
+                  >
+                    Запустить таймер
+                  </Button>
+                )}
+              </section>
+            </div>
+            <details className="manual-time">
+              <summary>Добавить время вручную</summary>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void act(async () => {
+                    await api(`/tasks/${task.id}/time-entries/manual`, {
+                      method: 'POST',
+                      body: JSON.stringify({ minutes: Number(mins), workDate }),
+                    });
+                    setMins('');
+                  });
+                }}
+              >
+                <div className="manual-time-grid">
+                  <NumberInput
+                    label="Продолжительность"
+                    min={1}
+                    max={1440}
+                    suffix=" мин"
+                    value={mins}
+                    onChange={(value) => setMins(String(value))}
+                    required
+                  />
+                  <DateInput
+                    label="Дата работы"
+                    dateParser={parseRussianDateInput}
+                    value={workDate}
+                    onChange={(value) => setWorkDate(value ?? '')}
+                    valueFormat="DD.MM.YYYY"
+                    required
+                  />
+                  <Button type="submit" disabled={busy}>
+                    Добавить время
+                  </Button>
+                </div>
+              </form>
+            </details>
             {error && <p role="alert">{error}</p>}
           </div>
         </Tabs.Panel>
@@ -2352,6 +2667,78 @@ function TaskDrawer({
           <TaskHistory boardId={data.board.id} taskId={task.id} />
         </Tabs.Panel>
       </Tabs>
+      <Modal
+        opened={!!discardAction}
+        onClose={() => setDiscardAction(null)}
+        title="Отменить несохранённые изменения?"
+        centered
+      >
+        <Stack>
+          <Text>
+            Несохранённые изменения
+            {discardAction === 'close' ? ' и черновик комментария' : ''} будут
+            потеряны.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setDiscardAction(null)}>
+              Продолжить работу
+            </Button>
+            <Button
+              color="red"
+              onClick={() => {
+                const action = discardAction;
+                setDiscardAction(null);
+                if (action === 'close') close();
+                else resetDraft();
+              }}
+            >
+              Отбросить изменения
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal
+        opened={confirmDelete}
+        onClose={() => {
+          if (!busy) setConfirmDelete(false);
+        }}
+        closeOnEscape={!busy}
+        closeOnClickOutside={!busy}
+        closeButtonProps={{ disabled: busy }}
+        title="Удалить задачу?"
+        centered
+      >
+        <Stack>
+          <Text>
+            Задача «{task.title}», её комментарии, файлы и учёт времени будут
+            удалены без возможности восстановления.
+          </Text>
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              disabled={busy}
+              onClick={() => setConfirmDelete(false)}
+            >
+              Отмена
+            </Button>
+            <Button
+              color="red"
+              loading={busy}
+              onClick={() =>
+                void act(async () => {
+                  await api(`/boards/${data.board.id}/tasks/${task.id}`, {
+                    method: 'DELETE',
+                  });
+                  setConfirmDelete(false);
+                  close();
+                })
+              }
+            >
+              Удалить навсегда
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
       <Modal
         opened={!!previewAttachment}
         onClose={() => setPreviewAttachment(null)}
@@ -2380,7 +2767,7 @@ function TaskDrawer({
           </div>
         )}
       </Modal>
-    </MantineDrawer>
+    </Modal>
   );
 }
 function TimeView({ data, close }: { data: Payload; close: () => void }) {
@@ -3400,6 +3787,7 @@ function CreateBoardPopover({
           <Select
             label="Отдел"
             value={departmentId || null}
+            comboboxProps={{ withinPortal: false }}
             onChange={(value) => setDepartmentId(value ?? '')}
             data={departments.map((department) => ({
               value: department.id,
@@ -4251,9 +4639,11 @@ function Workspace({
         )}
       </section>
       {board.data && task && (
-        <TaskDrawer
+        <TaskModal
+          key={task.id}
           data={board.data}
           task={task}
+          currentUser={user}
           close={() => setOpen(null)}
           refresh={refresh}
         />
