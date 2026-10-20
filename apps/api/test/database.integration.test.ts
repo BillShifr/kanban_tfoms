@@ -83,7 +83,44 @@ database('PostgreSQL invariants', () => {
     expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(15);
   });
 
-  it.each(['0014_', '0015_'])(
+  it('does not block a task on another reward grant and reconciles afterward', async () => {
+    const competing = await testPool.connect();
+    try {
+      await competing.query('begin');
+      await competing.query(
+        "select pg_advisory_xact_lock(hashtextextended('achievement:' || $1,0))",
+        [userA],
+      );
+      await client.query("set local statement_timeout='2s'");
+      await client.query(
+        "insert into tasks(id,board_id,column_id,title,author_id,position) values($1,$2,$3,'Concurrent reward',$4,1)",
+        [crypto.randomUUID(), boardA, columnA, userA],
+      );
+      expect(
+        (
+          await client.query(
+            'select * from earned_achievements where user_id=$1',
+            [userA],
+          )
+        ).rowCount,
+      ).toBe(0);
+      await competing.query('commit');
+      await client.query('select grant_achievements($1)', [userA]);
+      expect(
+        (
+          await client.query(
+            'select code from earned_achievements where user_id=$1',
+            [userA],
+          )
+        ).rows,
+      ).toEqual([{ code: 'initiative' }]);
+    } finally {
+      await competing.query('rollback');
+      competing.release();
+    }
+  });
+
+  it.each(['0014_', '0015_', '0016_'])(
     'upgrades a populated schema before %s without losing tasks',
     async (cutoff) => {
       const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -173,10 +210,13 @@ database('PostgreSQL invariants', () => {
         expect(upgraded.rows).toEqual([{ title: 'Legacy task' }]);
         expect(
           (await legacyPool.query('select * from contribution_events')).rows,
-        ).toEqual([]);
+        ).toHaveLength(cutoff === '0016_' ? 1 : 0);
         expect(
           (await legacyPool.query('select * from user_profiles')).rows,
         ).toEqual([]);
+        expect(
+          (await legacyPool.query('select code from earned_achievements')).rows,
+        ).toEqual(cutoff === '0016_' ? [{ code: 'initiative' }] : []);
         await legacyPool.query(
           `insert into task_comments(id,task_id,author_id,body)
          select $1,id,author_id,'Первый комментарий'
@@ -197,6 +237,97 @@ database('PostgreSQL invariants', () => {
       }
     },
   );
+
+  it('freezes tied season awards and keeps earned frames after tasks are deleted', async () => {
+    const taskA = crypto.randomUUID(),
+      taskB = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,completed_at,position)
+       values($1,$2,$3,'Reward A',$4,$4,now(),1),($5,$6,$7,'Reward B',$8,$8,now(),1)`,
+      [taskA, boardA, columnA, userA, taskB, boardB, columnB, userB],
+    );
+    await client.query(
+      "update contribution_events set created_at='2000-01-10T00:00:00Z' where task_id in ($1,$2)",
+      [taskA, taskB],
+    );
+    await client.query("update reward_clock set next_period='2000-01-01'");
+    await client.query(
+      "select finalize_reward_seasons('2000-02-01T00:00:00Z')",
+    );
+    await client.query(
+      "select finalize_reward_seasons('2000-02-01T00:00:00Z')",
+    );
+    const awards = await client.query(
+      "select place,points,completed from monthly_rewards where period='2000-01-01' and user_id in ($1,$2)",
+      [userA, userB],
+    );
+    expect(awards.rows).toEqual([
+      { place: 1, points: 12, completed: 1 },
+      { place: 1, points: 12, completed: 1 },
+    ]);
+    // Avoid advancing synthetic test seasons through the actual present.
+    await client.query(
+      "update reward_clock set next_period=date_trunc('month',now() at time zone 'UTC')::date",
+    );
+    await client.query('delete from tasks where id in ($1,$2)', [taskA, taskB]);
+    expect(
+      (
+        await client.query(
+          'select code from earned_achievements where user_id=$1 order by code',
+          [userA],
+        )
+      ).rows,
+    ).toEqual([{ code: 'initiative' }, { code: 'result' }]);
+    expect(
+      (
+        await client.query(
+          "select * from monthly_rewards where period='2000-01-01' and user_id in ($1,$2)",
+          [userA, userB],
+        )
+      ).rowCount,
+    ).toBe(2);
+    expect(
+      (
+        await client.query(
+          'select * from contribution_events where task_id=$1',
+          [taskA],
+        )
+      ).rowCount,
+    ).toBe(0);
+  });
+
+  it('finalizes before deletion and excludes creation-only contributors from seasonal prizes', async () => {
+    const taskA = crypto.randomUUID(),
+      taskB = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,completed_at,position)
+       values($1,$2,$3,'Completed',$4,$4,now(),1),($5,$6,$7,'Created only',$8,null,null,1)`,
+      [taskA, boardA, columnA, userA, taskB, boardB, columnB, userB],
+    );
+    await client.query(
+      "update contribution_events set created_at=(date_trunc('month',now() at time zone 'UTC')-interval '1 month') at time zone 'UTC' where task_id in ($1,$2)",
+      [taskA, taskB],
+    );
+    await client.query(
+      "update reward_clock set next_period=(date_trunc('month',now() at time zone 'UTC')-interval '1 month')::date",
+    );
+    await client.query('delete from tasks where id=$1', [taskA]);
+    expect(
+      (
+        await client.query(
+          'select completed from monthly_rewards where user_id=$1',
+          [userA],
+        )
+      ).rows,
+    ).toEqual([{ completed: 1 }]);
+    expect(
+      (
+        await client.query('select * from monthly_rewards where user_id=$1', [
+          userB,
+        ])
+      ).rows,
+    ).toEqual([]);
+  });
 
   it('uses superadmin, admin, and user account roles and defaults to user', async () => {
     const roles = await client.query<{ enumlabel: string }>(

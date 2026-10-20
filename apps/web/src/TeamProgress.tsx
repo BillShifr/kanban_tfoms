@@ -15,6 +15,13 @@ import {
   TextInput,
 } from '@mantine/core';
 import { ChevronRight, UserRound } from 'lucide-react';
+import { RewardAvatar } from './RewardAvatar';
+import {
+  PointCelebration,
+  RewardWardrobe,
+  type PointEvent,
+  type RewardsData,
+} from './Rewards';
 
 type Member = {
   id: string;
@@ -31,6 +38,8 @@ type Contributor = Member & {
   monthCreated: number;
   monthCompleted: number;
   rank: number | null;
+  frame?: string;
+  winnerPlace?: number | null;
 };
 type ProgressData = {
   leaders: Contributor[];
@@ -38,6 +47,8 @@ type ProgressData = {
   scope: string;
   period: string;
   participants: number;
+  rewards: RewardsData;
+  recentEvents: PointEvent[];
 };
 type Profile = { user: Member; bio: string; hasAvatar: boolean };
 type Request = <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -50,6 +61,20 @@ const milestones = [
     key: 'created' as const,
     goal: 1,
     art: 'initiative',
+  },
+  {
+    title: 'Верный курс',
+    description: 'Создать 10 задач',
+    key: 'created' as const,
+    goal: 10,
+    art: 'navigator',
+  },
+  {
+    title: 'Архитектор',
+    description: 'Создать 50 задач',
+    key: 'created' as const,
+    goal: 50,
+    art: 'architect',
   },
   {
     title: 'Довести до результата',
@@ -66,15 +91,35 @@ const milestones = [
     art: 'bridge',
   },
   {
+    title: 'Созвездие',
+    description: 'Завершить 25 задач',
+    key: 'completed' as const,
+    goal: 25,
+    art: 'constellation',
+  },
+  {
     title: 'Мастер результата',
     description: 'Завершить 50 задач',
     key: 'completed' as const,
     goal: 50,
     art: 'summit',
   },
+  {
+    title: 'На орбите',
+    description: 'Завершить 100 задач',
+    key: 'completed' as const,
+    goal: 100,
+    art: 'orbit',
+  },
 ];
 
-function Achievements({ person }: { person: Contributor }) {
+function Achievements({
+  person,
+  rewards,
+}: {
+  person: Contributor;
+  rewards: RewardsData;
+}) {
   const [selected, setSelected] = useState<(typeof milestones)[number] | null>(
     null,
   );
@@ -83,7 +128,7 @@ function Achievements({ person }: { person: Contributor }) {
       <div className="achievement-grid">
         {milestones.map((milestone) => {
           const { title, description, key, goal, art } = milestone;
-          const earned = person[key] >= goal;
+          const earned = rewards.earned.some((e) => e.code === art);
           return (
             <button
               type="button"
@@ -100,7 +145,7 @@ function Achievements({ person }: { person: Contributor }) {
               <strong>{title}</strong>
               <small>{description}</small>
               <Progress
-                value={Math.min(100, (person[key] / goal) * 100)}
+                value={earned ? 100 : Math.min(100, (person[key] / goal) * 100)}
                 aria-label={`${title}: ${person[key]} из ${goal}`}
               />
               <span>
@@ -128,15 +173,21 @@ function Achievements({ person }: { person: Contributor }) {
             <h2>{selected.title}</h2>
             <p>{selected.description}</p>
             <strong>
-              {person[selected.key]} из {selected.goal} ·{' '}
-              {person[selected.key] >= selected.goal
+              {Math.max(
+                person[selected.key],
+                rewards.earned.some((e) => e.code === selected.art)
+                  ? selected.goal
+                  : 0,
+              )}{' '}
+              из {selected.goal} ·{' '}
+              {rewards.earned.some((e) => e.code === selected.art)
                 ? 'Достигнуто'
                 : 'В процессе'}
             </strong>
             <p>
-              За всё время учёта в выбранной области. Возврат задачи в работу,
-              удаление или изменение доступа могут изменить прогресс. Сам значок
-              не добавляет баллов.
+              Достижение остаётся в коллекции после получения. Прогресс до
+              получения показан по выбранным доскам; сам значок не добавляет
+              баллов.
             </p>
           </div>
         )}
@@ -370,13 +421,14 @@ export function TeamProgress({
     [queryClient, user.id],
   );
   const [opened, setOpened] = useState(false);
+  const [wardrobeOpen, setWardrobeOpen] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [scope, setScope] = useState<'visible' | 'global'>('visible');
   const progress = useQuery<ProgressData>({
     queryKey: ['progress', user.id, scope],
     queryFn: () => request(`/progress?scope=${scope}`),
-    refetchInterval: 60000,
+    refetchInterval: 15000,
   });
   const profile = useQuery<Profile>({
     queryKey: ['profile', user.id],
@@ -425,12 +477,29 @@ export function TeamProgress({
       Загружаем вклад команды…
     </Text>
   ) : null;
-  const next = data && milestones.find((m) => data.me[m.key] < m.goal);
+  const next =
+    data &&
+    milestones
+      .filter((m) => !data.rewards.earned.some((e) => e.code === m.art))
+      .sort(
+        (a, b) =>
+          data.me[b.key] / b.goal - data.me[a.key] / a.goal || a.goal - b.goal,
+      )[0];
+  const selectFrame = async (frame: string) => {
+    await request('/profile/frame', {
+      method: 'PUT',
+      body: JSON.stringify({ frame }),
+    });
+    await Promise.all([
+      profile.refetch(),
+      queryClient.invalidateQueries({ queryKey: ['progress', user.id] }),
+    ]);
+  };
   const leaders = (limit: number) =>
     data && (
       <div className="leader-table">
         <div className="leader-table-heading" aria-hidden="true">
-          <span>№</span>
+          <span>Место</span>
           <span>Участник</span>
           <span>Баллы</span>
         </div>
@@ -440,18 +509,21 @@ export function TeamProgress({
               key={person.id}
               className={person.id === user.id ? 'is-me' : ''}
             >
-              <span className="leader-position">{person.rank ?? '—'}</span>
-              <Avatar
+              <span className="leader-position">
+                <b>{person.rank ?? '—'}</b>
+                <small>место</small>
+              </span>
+              <RewardAvatar
+                name={name(person)}
+                frame={person.frame}
+                winnerPlace={person.winnerPlace}
                 size={32}
-                radius="xl"
                 src={
                   person.hasAvatar
                     ? `/api/profile/avatar/${person.id}`
                     : undefined
                 }
-              >
-                {name(person).slice(0, 1)}
-              </Avatar>
+              />
               <div>
                 <strong title={name(person)}>
                   {name(person)}
@@ -459,7 +531,10 @@ export function TeamProgress({
                 </strong>
                 <small>Завершено: {person.monthCompleted}</small>
               </div>
-              <b>{person.points.toLocaleString('ru-RU')}</b>
+              <span className="leader-points">
+                <b>{person.points.toLocaleString('ru-RU')}</b>
+                <small>баллов</small>
+              </span>
             </li>
           ))}
         </ol>
@@ -467,6 +542,7 @@ export function TeamProgress({
     );
   return (
     <>
+      <PointCelebration events={data?.recentEvents} userId={user.id} />
       <aside className="team-rail" aria-label="Команда и достижения">
         <div className="team-rail-heading">
           <h2>Команда и достижения</h2>
@@ -513,7 +589,7 @@ export function TeamProgress({
                 <small>
                   {next ? 'Следующее достижение' : 'Коллекция собрана'}
                 </small>
-                <strong>{next ? next.title : 'Все четыре достижения'}</strong>
+                <strong>{next ? next.title : 'Все восемь достижений'}</strong>
                 <span>
                   {next
                     ? `${data.me[next.key]} / ${next.goal} · ${next.description}`
@@ -541,6 +617,13 @@ export function TeamProgress({
           onClick={() => setOpened(true)}
         >
           Рейтинг и достижения
+        </Button>
+        <Button
+          className="reward-open"
+          variant="subtle"
+          onClick={() => setWardrobeOpen(true)}
+        >
+          Рамки и награды
         </Button>
       </aside>
       <button
@@ -581,8 +664,20 @@ export function TeamProgress({
               </span>
             </div>
             <section className="team-collection">
-              <h2>Ваша коллекция</h2>
-              <Achievements person={data.me} />
+              <div className="reward-section-heading">
+                <h2>Ваша коллекция</h2>
+                <span>
+                  {data.rewards.earned.length} / {milestones.length}
+                </span>
+              </div>
+              <Achievements person={data.me} rewards={data.rewards} />
+              <Button
+                variant="light"
+                mt="md"
+                onClick={() => setWardrobeOpen(true)}
+              >
+                Рамки и награды
+              </Button>
             </section>
             <section className="team-leaders">
               <div className="team-section-title">
@@ -623,11 +718,29 @@ export function TeamProgress({
               <p>
                 Учёт начат с обновления; старые создания не восстановлены задним
                 числом. Месяц считается по UTC. Достижения считаются за всё
-                время учёта в выбранной области рейтинга; при изменении доступа
-                или отмене результата они могут измениться.
+                время учёта. Полученные значки остаются в коллекции, даже если
+                задача возвращена в работу.
               </p>
             </details>
           </>
+        )}
+      </Modal>
+      <Modal
+        opened={wardrobeOpen}
+        onClose={() => setWardrobeOpen(false)}
+        title="Рамки и награды"
+        size={760}
+        centered
+      >
+        {data && (
+          <RewardWardrobe
+            rewards={data.rewards}
+            name={name(user)}
+            avatar={
+              data.me.hasAvatar ? `/api/profile/avatar/${user.id}` : undefined
+            }
+            onSelect={selectFrame}
+          />
         )}
       </Modal>
       <Modal
@@ -670,7 +783,20 @@ export function TeamProgress({
                 <Text size="xs" c="dimmed" mb="sm">
                   {progress.data.scope}
                 </Text>
-                <Achievements person={progress.data.me} />
+                <Achievements
+                  person={progress.data.me}
+                  rewards={progress.data.rewards}
+                />
+                <RewardWardrobe
+                  rewards={progress.data.rewards}
+                  name={name(user)}
+                  avatar={
+                    profile.data.hasAvatar
+                      ? `/api/profile/avatar/${user.id}`
+                      : undefined
+                  }
+                  onSelect={selectFrame}
+                />
               </section>
             )}
           </Stack>

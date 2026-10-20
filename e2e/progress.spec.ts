@@ -82,13 +82,20 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await expect(drawer.locator('.leader-list li').first()).toBeVisible();
     await expect(drawer.getByText('Баллы', { exact: true })).toBeVisible();
     const numericStyles = await drawer
-      .locator('.leader-position')
+      .locator('.leader-position b')
       .first()
       .evaluate((el) => ({
         size: getComputedStyle(el).fontSize,
         variant: getComputedStyle(el).fontVariantNumeric,
       }));
-    expect(numericStyles).toEqual({ size: '14px', variant: 'tabular-nums' });
+    expect(numericStyles).toEqual({ size: '18px', variant: 'tabular-nums' });
+    await expect(drawer.locator('.leader-position small').first()).toHaveText(
+      'место',
+    );
+    await expect(drawer.locator('.leader-points small').first()).toHaveText(
+      'баллов',
+    );
+    await expect(drawer.locator('.achievement')).toHaveCount(8);
     await drawer.getByText('Доступные доски', { exact: true }).click();
     await expect(drawer.getByText('Пока нет результатов')).toBeVisible();
     await drawer.getByRole('button', { name: /Первый шаг/ }).click();
@@ -101,6 +108,27 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page.locator('.user-menu-trigger').click();
     await page.getByRole('menuitem', { name: 'Мой профиль' }).click();
     const profile = page.getByRole('dialog', { name: /профиль/i });
+    const aura = profile.locator('.frame-nova.winner-aura');
+    expect(
+      await aura.evaluate(
+        (el) => getComputedStyle(el, '::after').animationName,
+      ),
+    ).toBe('winner-breathe');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(
+      await aura.evaluate(
+        (el) => getComputedStyle(el, '::after').animationName,
+      ),
+    ).toBe('none');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    expect(
+      (
+        await page.request.put('/api/profile/frame', {
+          data: { frame: 'nova' },
+        })
+      ).status(),
+    ).toBe(403);
+    await expect(profile.getByRole('button', { name: /Искра/ })).toBeDisabled();
     await profile.getByLabel('Фамилия', { exact: true }).fill('Тестов');
     await profile.getByLabel('Имя', { exact: true }).fill('Иван');
     await profile.getByLabel('О себе').fill('Помогаю команде');
@@ -175,6 +203,16 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     });
     expect(own.status()).toBe(201);
     ownTaskId = (await own.json()).task.id;
+    await profile.getByRole('button', { name: 'Сохранить профиль' }).click();
+    await expect(page.locator('.points-celebration')).toContainText('+2');
+    expect(
+      await page
+        .locator('.points-celebration')
+        .evaluate((el) => getComputedStyle(el).animationName),
+    ).toBe('points-arrive');
+    await page
+      .getByRole('button', { name: 'Закрыть уведомление о баллах' })
+      .click();
     for (const column of [
       detail.columns.at(-1),
       detail.columns[0],
@@ -202,7 +240,25 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       monthCompleted: 1,
       rank: 1,
     });
+    expect(scored.rewards.frames).toContain('trail');
+    expect(scored.rewards.frames).not.toContain('nova');
+    expect(
+      scored.rewards.earned.map((e: { code: string }) => e.code).sort(),
+    ).toEqual(['initiative', 'result']);
+    await profile.getByRole('button', { name: 'Сохранить профиль' }).click();
+    await expect(page.locator('.points-celebration')).toContainText('+10');
+    await page
+      .getByRole('button', { name: 'Закрыть уведомление о баллах' })
+      .click();
+    await profile.getByRole('button', { name: /Искра/ }).click();
+    await expect(
+      profile.getByRole('button', { name: /Искра/ }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.user-menu-trigger .frame-trail')).toBeVisible();
+    await expect(page.locator('.points-celebration')).toHaveCount(0);
     await page.reload();
+    await expect(page.locator('.user-menu-trigger .frame-trail')).toBeVisible();
+    await expect(page.locator('.points-celebration')).toHaveCount(0);
     const title = `My contribution ${suffix}`;
     await page
       .getByRole('button', { name: `Свернуть задачу «${title}»`, exact: true })

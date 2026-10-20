@@ -50,6 +50,7 @@ import {
   type AccountRole,
 } from './policy.js';
 import { assertBootstrapCredentials, loadRuntimeConfig } from './config.js';
+import { rewardsFor } from './rewards.js';
 const runtime = loadRuntimeConfig();
 const cookieName = 'kanban_session',
   bodyLimit = 16 * 1024,
@@ -549,14 +550,33 @@ export async function buildApp() {
     const u = await user(r, reply);
     if (!u) return;
     const result = await pool.query(
-      'select bio, avatar is not null as "hasAvatar" from user_profiles where user_id=$1',
+      'select bio, avatar is not null as "hasAvatar",selected_frame as frame from user_profiles where user_id=$1',
       [u.id],
     );
     return {
       user: u,
       bio: result.rows[0]?.bio ?? '',
       hasAvatar: result.rows[0]?.hasAvatar ?? false,
+      frame: result.rows[0]?.frame ?? 'none',
     };
+  });
+  app.put('/profile/frame', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const p = z
+      .object({ frame: z.string().max(20) })
+      .strict()
+      .safeParse(r.body);
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const rewards = await rewardsFor(pool, u.id);
+    if (!rewards.frames.includes(p.data.frame))
+      return reply.code(403).send({ code: 'FRAME_LOCKED' });
+    await pool.query(
+      `insert into user_profiles(user_id,selected_frame) values($1,$2)
+       on conflict(user_id) do update set selected_frame=excluded.selected_frame`,
+      [u.id, p.data.frame],
+    );
+    return { frame: p.data.frame };
   });
   app.patch('/profile', async (r, reply) => {
     const u = await user(r, reply);
@@ -647,6 +667,7 @@ export async function buildApp() {
       .safeParse(r.query);
     if (!scope.success)
       return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const rewards = await rewardsFor(pool, u.id);
     const result = await pool.query(
       `with visible_events as (
         select e.* from contribution_events e
@@ -657,7 +678,9 @@ export async function buildApp() {
           or exists(select 1 from department_members dm where dm.department_id=b.department_id and dm.user_id=$1))
       )
       select u.id,u.first_name as "firstName",u.last_name as "lastName",u.email,
-        (p.avatar is not null) as "hasAvatar",
+        (p.avatar is not null) as "hasAvatar",coalesce(p.selected_frame,'none') as frame,
+        (select mr.place from monthly_rewards mr where mr.user_id=u.id
+         and mr.period=(date_trunc('month',now() at time zone 'UTC')-interval '1 month')::date) as "winnerPlace",
         coalesce(sum(e.points) filter(where e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC'),0)::int as points,
         count(*) filter(where e.kind='created' and e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC')::int as "monthCreated",
         count(*) filter(where e.kind='completed' and e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC')::int as "monthCompleted",
@@ -666,7 +689,7 @@ export async function buildApp() {
       from users u left join visible_events e on e.user_id=u.id
       left join user_profiles p on p.user_id=u.id
       where u.archived_at is null and ($3::boolean or e.user_id is not null)
-      group by u.id,p.avatar order by points desc, completed desc,u.id`,
+      group by u.id,p.avatar,p.selected_frame order by points desc, completed desc,u.id`,
       [
         u.id,
         isElevated(u.role) || scope.data.scope === 'global',
@@ -679,7 +702,17 @@ export async function buildApp() {
         places.set(row.points, index + 1);
       return { ...row, rank: places.get(row.points) ?? null };
     });
+    const recentEvents = await pool.query(
+      `select md5(e.task_id::text || ':' || e.kind) as id,e.kind,e.points,e.created_at as "createdAt"
+       from contribution_events e join tasks t on t.id=e.task_id join boards b on b.id=t.board_id
+       where e.user_id=$1 and e.created_at > now()-interval '1 day'
+         and b.archived_at is null and (e.kind='created' or t.completed_at is not null)
+       order by e.created_at desc limit 100`,
+      [u.id],
+    );
     return {
+      rewards,
+      recentEvents: recentEvents.rows,
       scope:
         scope.data.scope === 'global'
           ? 'Все сотрудники'

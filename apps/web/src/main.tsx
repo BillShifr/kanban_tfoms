@@ -24,7 +24,6 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   ActionIcon,
-  Avatar,
   Badge,
   Button,
   Checkbox,
@@ -101,6 +100,7 @@ import '@mantine/dates/styles.css';
 import 'dayjs/locale/ru';
 import './styles.css';
 import { TeamProgress } from './TeamProgress';
+import { RewardAvatar } from './RewardAvatar';
 type AccountRole = 'superadmin' | 'admin' | 'user';
 type User = {
   id: string;
@@ -534,7 +534,7 @@ function UserMenu({
   openProfile: () => void;
 }) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
-  const profile = useQuery<{ hasAvatar: boolean }>({
+  const profile = useQuery<{ hasAvatar: boolean; frame: string }>({
     queryKey: ['profile', user.id],
     queryFn: () => api('/profile'),
   });
@@ -551,17 +551,16 @@ function UserMenu({
           color="gray"
           className="user-menu-trigger"
           leftSection={
-            <Avatar
+            <RewardAvatar
+              name={personLabel(user)}
+              frame={profile.data?.frame}
               size={28}
-              radius="xl"
               src={
                 profile.data?.hasAvatar
                   ? `/api/profile/avatar/${user.id}?v=${profile.dataUpdatedAt}`
                   : undefined
               }
-            >
-              {personLabel(user).slice(0, 1)}
-            </Avatar>
+            />
           }
           rightSection={<ChevronDown size={15} />}
         >
