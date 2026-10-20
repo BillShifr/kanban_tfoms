@@ -87,20 +87,74 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       .evaluate((el) => ({
         size: getComputedStyle(el).fontSize,
         variant: getComputedStyle(el).fontVariantNumeric,
+        weight: getComputedStyle(el).fontWeight,
+        family: getComputedStyle(el).fontFamily,
       }));
-    expect(numericStyles).toEqual({ size: '18px', variant: 'tabular-nums' });
+    expect(numericStyles).toMatchObject({
+      size: '32px',
+      variant: 'tabular-nums',
+      weight: '800',
+    });
+    expect(numericStyles.family).toContain('Barlow Condensed');
     await expect(drawer.locator('.leader-position small').first()).toHaveText(
       'место',
     );
     await expect(drawer.locator('.leader-points small').first()).toHaveText(
       'баллов',
     );
+    const scoreStyles = await drawer
+      .locator('.leader-list li')
+      .evaluateAll((rows) =>
+        rows.map((row) => {
+          const box = getComputedStyle(row.querySelector('.leader-points')!);
+          const rankBox = getComputedStyle(
+            row.querySelector('.leader-position')!,
+          );
+          return {
+            podium: row.hasAttribute('data-podium'),
+            background: box.backgroundColor,
+            rankBackground: rankBox.backgroundColor,
+            shadows: ['.leader-position b', '.leader-points b'].map(
+              (selector) =>
+                getComputedStyle(row.querySelector(selector)!).textShadow,
+            ),
+          };
+        }),
+      );
+    for (const row of scoreStyles) {
+      expect(row.background).toBe('rgba(0, 0, 0, 0)');
+      expect(row.rankBackground).toBe('rgba(0, 0, 0, 0)');
+      for (const shadow of row.shadows) {
+        if (row.podium) expect(shadow).not.toBe('none');
+        else expect(shadow).toBe('none');
+      }
+    }
+    const ordinaryStyle = await drawer
+      .locator('.leader-list li')
+      .first()
+      .evaluate((row) => {
+        const ordinary = row.cloneNode(true) as HTMLElement;
+        ordinary.removeAttribute('data-podium');
+        row.parentElement!.append(ordinary);
+        try {
+          return ['.leader-position b', '.leader-points b'].map((selector) => {
+            const style = getComputedStyle(ordinary.querySelector(selector)!);
+            return { weight: style.fontWeight, shadow: style.textShadow };
+          });
+        } finally {
+          ordinary.remove();
+        }
+      });
+    expect(ordinaryStyle).toEqual([
+      { weight: '800', shadow: 'none' },
+      { weight: '800', shadow: 'none' },
+    ]);
+    await drawer.evaluate(() => document.fonts.ready);
     expect(
-      await drawer
-        .locator('.leader-points b')
-        .first()
-        .evaluate((el) => getComputedStyle(el).color),
-    ).toBe('rgb(255, 255, 255)');
+      await drawer.evaluate(() =>
+        document.fonts.check('800 32px "Barlow Condensed"'),
+      ),
+    ).toBe(true);
     await expect(drawer.locator('[data-podium="1"]').first()).toBeVisible();
     await expect(drawer.locator('.achievement')).toHaveCount(8);
     await drawer.getByText('Доступные доски', { exact: true }).click();

@@ -798,9 +798,22 @@ a {
   padding: 8px 2px;
   color: var(--app-text);
 }
-.leader-position b {
-  font-size: 18px;
-  font-weight: 600;
+@font-face {
+  font-family: 'Barlow Condensed';
+  src: url('/fonts/BarlowCondensed-ExtraBold.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+.leader-position b,
+.leader-points b {
+  font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--app-text);
+  text-shadow: none;
 }
 .leader-list li > div:not(.mantine-Avatar-root) {
   min-width: 0;
@@ -825,33 +838,15 @@ a {
   display: grid;
   justify-items: end;
   gap: 2px;
-  padding: 8px;
-  background: light-dark(#2458d3, #244ba5);
-  border: 1px solid light-dark(#2458d3, #527bd6);
-  border-radius: 12px;
-  box-shadow: 0 3px 9px #2458d31a;
+  padding: 8px 0;
 }
-.leader-points small {
-  color: #e2ebff;
-}
-.leader-list li[data-podium] .leader-position {
-  color: light-dark(#875309, #f2ce7f);
-  background: light-dark(#fff3d6, #3a3020);
-  border: 1px solid light-dark(#e8ca88, #806437);
-  border-radius: 12px;
-}
-.leader-list li[data-podium] .leader-position small {
-  color: inherit;
-}
-.leader-list li[data-podium='1'] {
-  box-shadow: inset 3px 0 light-dark(#c58b2c, #e3b65e);
+.leader-list li[data-podium] .leader-position b,
+.leader-list li[data-podium] .leader-points b {
+  color: light-dark(#865c1a, #ebce94);
+  text-shadow: 0 0 12px light-dark(#bf944336, #e8bd5438);
 }
 .leader-points b {
-  color: #fff;
-  font-size: 20px;
-  font-weight: 700;
   text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 .team-rail .leader-list li {
   grid-template-columns: 36px 24px minmax(0, 1fr) 56px;
@@ -871,10 +866,11 @@ a {
   font-size: 12px;
 }
 .team-rail .leader-points {
-  padding: 6px;
+  padding: 6px 0;
 }
+.team-rail .leader-position b,
 .team-rail .leader-points b {
-  font-size: 17px;
+  font-size: 25px;
 }
 .team-rail .leader-position small,
 .team-rail .leader-points small {
