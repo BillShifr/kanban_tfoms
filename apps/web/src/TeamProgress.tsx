@@ -14,7 +14,7 @@ import {
   Textarea,
   TextInput,
 } from '@mantine/core';
-import { ArrowUpRight, Check, ChevronRight, UserRound } from 'lucide-react';
+import { ChevronRight, UserRound } from 'lucide-react';
 
 type Member = {
   id: string;
@@ -428,43 +428,49 @@ export function TeamProgress({
   const next = data && milestones.find((m) => data.me[m.key] < m.goal);
   const leaders = (limit: number) =>
     data && (
-      <ol className="leader-list">
-        {data.leaders.slice(0, limit).map((person) => (
-          <li key={person.id} className={person.id === user.id ? 'is-me' : ''}>
-            <span className="leader-position">{person.rank ?? '—'}</span>
-            <Avatar
-              size={32}
-              radius="xl"
-              src={
-                person.hasAvatar
-                  ? `/api/profile/avatar/${person.id}`
-                  : undefined
-              }
+      <div className="leader-table">
+        <div className="leader-table-heading" aria-hidden="true">
+          <span>№</span>
+          <span>Участник</span>
+          <span>Баллы</span>
+        </div>
+        <ol className="leader-list" aria-label="Рейтинг участников">
+          {data.leaders.slice(0, limit).map((person) => (
+            <li
+              key={person.id}
+              className={person.id === user.id ? 'is-me' : ''}
             >
-              {name(person).slice(0, 1)}
-            </Avatar>
-            <div>
-              <strong title={name(person)}>
-                {name(person)}
-                {person.id === user.id ? ' · вы' : ''}
-              </strong>
-              <small>{person.monthCompleted} завершено за месяц</small>
-            </div>
-            <b>
-              {person.points}
-              <small>баллов</small>
-            </b>
-          </li>
-        ))}
-      </ol>
+              <span className="leader-position">{person.rank ?? '—'}</span>
+              <Avatar
+                size={32}
+                radius="xl"
+                src={
+                  person.hasAvatar
+                    ? `/api/profile/avatar/${person.id}`
+                    : undefined
+                }
+              >
+                {name(person).slice(0, 1)}
+              </Avatar>
+              <div>
+                <strong title={name(person)}>
+                  {name(person)}
+                  {person.id === user.id ? ' · вы' : ''}
+                </strong>
+                <small>Завершено: {person.monthCompleted}</small>
+              </div>
+              <b>{person.points.toLocaleString('ru-RU')}</b>
+            </li>
+          ))}
+        </ol>
+      </div>
     );
   return (
     <>
       <aside className="team-rail" aria-label="Команда и достижения">
         <div className="team-rail-heading">
-          <span className="eyebrow">ВМЕСТЕ К РЕЗУЛЬТАТУ</span>
           <h2>Команда и достижения</h2>
-          <p>{period} · UTC</p>
+          <p>{period}</p>
         </div>
         {scopeControl}
         {loadState}
@@ -473,22 +479,23 @@ export function TeamProgress({
             <section className="team-score" aria-label="Ваш результат">
               <span>Ваш вклад за месяц</span>
               <div className="team-score-number">
-                <strong>{data.me.points}</strong>
+                <strong>{data.me.points.toLocaleString('ru-RU')}</strong>
                 <span>баллов</span>
-                <ArrowUpRight size={28} />
               </div>
               <div className="team-score-breakdown">
                 <span>
-                  <b>{data.me.monthCreated}</b> создано × 2
+                  <span>Создано</span>
+                  <b>{data.me.monthCreated.toLocaleString('ru-RU')}</b>
                 </span>
                 <span>
-                  <b>{data.me.monthCompleted}</b> завершено × 10
+                  <span>Завершено</span>
+                  <b>{data.me.monthCompleted.toLocaleString('ru-RU')}</b>
                 </span>
               </div>
               <p>
                 {data.me.rank
                   ? `Место ${data.me.rank} из ${data.participants}`
-                  : 'Первое место в рейтинге начинается с первого действия'}
+                  : 'Место в рейтинге: —'}
               </p>
             </section>
             <button
@@ -503,7 +510,9 @@ export function TeamProgress({
                 height={78}
               />
               <span>
-                <small>{next ? 'БЛИЖАЙШАЯ ЦЕЛЬ' : 'КОЛЛЕКЦИЯ СОБРАНА'}</small>
+                <small>
+                  {next ? 'Следующее достижение' : 'Коллекция собрана'}
+                </small>
                 <strong>{next ? next.title : 'Все четыре достижения'}</strong>
                 <span>
                   {next
@@ -519,10 +528,7 @@ export function TeamProgress({
                 <span>{data.participants} участников</span>
               </div>
               {!data.leaders.length && (
-                <p className="team-empty">
-                  Первый результат ещё впереди. Создайте задачу или завершите
-                  назначенную.
-                </p>
+                <p className="team-empty">Пока нет результатов</p>
               )}
               {leaders(3)}
             </section>
@@ -531,16 +537,11 @@ export function TeamProgress({
         <Button
           className="team-open"
           variant="default"
-          rightSection={<ArrowUpRight size={16} />}
+          rightSection={<ChevronRight size={16} />}
           onClick={() => setOpened(true)}
         >
           Рейтинг и достижения
         </Button>
-        <p className="team-footnote">
-          Признание вклада, не оценка труда.
-          <br />
-          Только агрегаты — без закрытых задач.
-        </p>
       </aside>
       <button
         type="button"
@@ -567,17 +568,13 @@ export function TeamProgress({
         classNames={{ content: 'team-dialog' }}
       >
         {scopeControl}
-        <Text size="sm" c="dimmed" my="md">
-          {scope === 'global'
-            ? 'Общий вклад сотрудников без раскрытия задач и закрытых досок.'
-            : 'Вклад в доски, к которым у вас есть доступ.'}
-        </Text>
         {loadState}
         {data && (
           <>
             <div className="team-personal-strip">
-              <Check size={20} />
-              <strong>Ваш результат: {data.me.points} баллов</strong>
+              <strong>
+                Ваш результат: {data.me.points.toLocaleString('ru-RU')} баллов
+              </strong>
               <span>
                 {data.me.rank ? `Место ${data.me.rank}` : 'Пока без места'} ·{' '}
                 {period}
@@ -585,28 +582,27 @@ export function TeamProgress({
             </div>
             <section className="team-collection">
               <h2>Ваша коллекция</h2>
-              <p>
-                За всё время учёта · {data.scope}. Нажмите на значок, чтобы
-                узнать условие.
-              </p>
               <Achievements person={data.me} />
             </section>
             <section className="team-leaders">
-              <h2>Рейтинг месяца</h2>
-              <p>
-                Первые 20 участников · {data.participants} всего. Одинаковые
-                баллы — одинаковое место.
-              </p>
+              <div className="team-section-title">
+                <h2>Рейтинг месяца</h2>
+                <span>{data.participants} участников</span>
+              </div>
               {!progress.data.leaders.length && (
-                <Text>
-                  Первый результат ещё впереди. Создайте задачу или завершите
-                  назначенную.
-                </Text>
+                <Text>Пока нет результатов</Text>
               )}
               {leaders(20)}
+              {data.participants > 20 && (
+                <p>Показано 20 из {data.participants}</p>
+              )}
             </section>
             <details className="progress-rules">
               <summary>Как начисляются баллы</summary>
+              <p>
+                При одинаковом количестве баллов участники занимают одно место.
+                Общий рейтинг не раскрывает содержание закрытых досок.
+              </p>
               <p>
                 +2 автору за создание, +10 назначенному исполнителю за первое
                 завершение. Завершением считается перенос в последнюю колонку

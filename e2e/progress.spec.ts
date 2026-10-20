@@ -79,15 +79,18 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page.locator(isMobile ? '.team-mobile-bar' : '.team-open').click();
     const drawer = page.getByRole('dialog', { name: 'Команда и достижения' });
     await drawer.getByText('Все сотрудники', { exact: true }).first().click();
-    await expect(
-      drawer.getByText(
-        'Общий вклад сотрудников без раскрытия задач и закрытых досок.',
-      ),
-    ).toBeVisible();
+    await expect(drawer.locator('.leader-list li').first()).toBeVisible();
+    await expect(drawer.getByText('Баллы', { exact: true })).toBeVisible();
+    const numericStyles = await drawer
+      .locator('.leader-position')
+      .first()
+      .evaluate((el) => ({
+        size: getComputedStyle(el).fontSize,
+        variant: getComputedStyle(el).fontVariantNumeric,
+      }));
+    expect(numericStyles).toEqual({ size: '14px', variant: 'tabular-nums' });
     await drawer.getByText('Доступные доски', { exact: true }).click();
-    await expect(
-      drawer.getByText(/Первый результат ещё впереди/),
-    ).toBeVisible();
+    await expect(drawer.getByText('Пока нет результатов')).toBeVisible();
     await drawer.getByRole('button', { name: /Первый шаг/ }).click();
     const condition = page.getByRole('dialog', { name: 'Условие достижения' });
     await expect(condition.getByText('0 из 1 · В процессе')).toBeVisible();
