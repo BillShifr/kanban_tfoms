@@ -470,7 +470,22 @@ test.describe('core board workflow', () => {
     const headerBox = await header.boundingBox();
     const columnBox = await firstColumn.boundingBox();
     expect(headerBox?.height).toBeGreaterThanOrEqual(48);
-    expect(headerBox?.height).toBeLessThanOrEqual(72);
+    // The mobile header has a dedicated second row for profile and progress.
+    expect(headerBox?.height).toBe(metrics.viewport <= 760 ? 104 : 56);
+    const progressBox = await header
+      .getByRole('button', { name: /Пульс команды/ })
+      .boundingBox();
+    const profileBox = await header
+      .getByRole('button', { name: 'Мой профиль' })
+      .boundingBox();
+    expect(progressBox).not.toBeNull();
+    expect(profileBox).not.toBeNull();
+    expect(progressBox!.x + progressBox!.width).toBeLessThanOrEqual(
+      profileBox!.x,
+    );
+    expect(profileBox!.x + profileBox!.width).toBeLessThanOrEqual(
+      metrics.viewport,
+    );
     expect(columnBox?.width).toBeGreaterThanOrEqual(280);
     expect(columnBox?.width).toBeLessThanOrEqual(340);
   });
@@ -1595,7 +1610,9 @@ test.describe('core board workflow', () => {
 
     const card = taskCard(page, title);
     await expect(
-      card.getByTitle(`${externalAssignee} · имя`, { exact: true }),
+      card.getByTitle(`Исполнитель: ${externalAssignee} · без учётной записи`, {
+        exact: true,
+      }),
     ).toBeVisible();
 
     await page.getByRole('button', { name: /^Фильтры/ }).click();

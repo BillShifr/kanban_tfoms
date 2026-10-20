@@ -83,111 +83,120 @@ database('PostgreSQL invariants', () => {
     expect(Number(result.rows[0]?.count)).toBeGreaterThanOrEqual(15);
   });
 
-  it('upgrades a populated pre-comments schema without losing tasks', async () => {
-    const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
-    const migrationDirectory = fileURLToPath(
-      new URL('../drizzle/', import.meta.url),
-    );
-    await testPool.query(`create schema "${schema}"`);
-    const legacyPool = new Pool({
-      connectionString: databaseUrl,
-      options: `-c search_path=${schema},public`,
-    });
+  it.each(['0014_', '0015_'])(
+    'upgrades a populated schema before %s without losing tasks',
+    async (cutoff) => {
+      const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
+      const migrationDirectory = fileURLToPath(
+        new URL('../drizzle/', import.meta.url),
+      );
+      await testPool.query(`create schema "${schema}"`);
+      const legacyPool = new Pool({
+        connectionString: databaseUrl,
+        options: `-c search_path=${schema},public`,
+      });
 
-    try {
-      const migrationNames = (await readdir(migrationDirectory))
-        .filter((name) => name.endsWith('.sql') && name < '0014_')
-        .sort();
-      const legacyClient = await legacyPool.connect();
       try {
-        await legacyClient.query(
-          `create table _migrations (
+        const migrationNames = (await readdir(migrationDirectory))
+          .filter((name) => name.endsWith('.sql') && name < cutoff)
+          .sort();
+        const legacyClient = await legacyPool.connect();
+        try {
+          await legacyClient.query(
+            `create table _migrations (
             name text primary key,
             applied_at timestamptz not null default now(),
             checksum text
           )`,
-        );
-        for (const name of migrationNames) {
-          const sql = await readFile(`${migrationDirectory}/${name}`, 'utf8');
-          await legacyClient.query('begin');
-          try {
-            await legacyClient.query(sql);
-            await legacyClient.query(
-              'insert into _migrations(name, checksum) values ($1, $2)',
-              [name, migrationChecksum(sql)],
-            );
-            await legacyClient.query('commit');
-          } catch (error) {
-            await legacyClient.query('rollback');
-            throw error;
+          );
+          for (const name of migrationNames) {
+            const sql = await readFile(`${migrationDirectory}/${name}`, 'utf8');
+            await legacyClient.query('begin');
+            try {
+              await legacyClient.query(sql);
+              await legacyClient.query(
+                'insert into _migrations(name, checksum) values ($1, $2)',
+                [name, migrationChecksum(sql)],
+              );
+              await legacyClient.query('commit');
+            } catch (error) {
+              await legacyClient.query('rollback');
+              throw error;
+            }
           }
+
+          const legacyUser = crypto.randomUUID();
+          const legacyDepartment = crypto.randomUUID();
+          const legacyBoard = crypto.randomUUID();
+          const legacyColumn = crypto.randomUUID();
+          const legacyTask = crypto.randomUUID();
+          await legacyClient.query(
+            `insert into users(id,email,password_hash,role)
+           values ($1,$2,'hash','user')`,
+            [legacyUser, `${legacyUser}@example.test`],
+          );
+          await legacyClient.query(
+            'insert into departments(id,name) values ($1,$2)',
+            [legacyDepartment, `Legacy ${legacyDepartment}`],
+          );
+          await legacyClient.query(
+            `insert into boards(id,name,department_id,created_by)
+           values ($1,'Legacy board',$2,$3)`,
+            [legacyBoard, legacyDepartment, legacyUser],
+          );
+          await legacyClient.query(
+            `insert into board_members(board_id,user_id,role)
+           values ($1,$2,'admin')`,
+            [legacyBoard, legacyUser],
+          );
+          await legacyClient.query(
+            `insert into columns(id,board_id,name,position)
+           values ($1,$2,'Legacy column',1)`,
+            [legacyColumn, legacyBoard],
+          );
+          await legacyClient.query(
+            `insert into tasks(id,board_id,column_id,title,author_id,position)
+           values ($1,$2,$3,'Legacy task',$4,1)`,
+            [legacyTask, legacyBoard, legacyColumn, legacyUser],
+          );
+        } finally {
+          legacyClient.release();
         }
 
-        const legacyUser = crypto.randomUUID();
-        const legacyDepartment = crypto.randomUUID();
-        const legacyBoard = crypto.randomUUID();
-        const legacyColumn = crypto.randomUUID();
-        const legacyTask = crypto.randomUUID();
-        await legacyClient.query(
-          `insert into users(id,email,password_hash,role)
-           values ($1,$2,'hash','user')`,
-          [legacyUser, `${legacyUser}@example.test`],
-        );
-        await legacyClient.query(
-          'insert into departments(id,name) values ($1,$2)',
-          [legacyDepartment, `Legacy ${legacyDepartment}`],
-        );
-        await legacyClient.query(
-          `insert into boards(id,name,department_id,created_by)
-           values ($1,'Legacy board',$2,$3)`,
-          [legacyBoard, legacyDepartment, legacyUser],
-        );
-        await legacyClient.query(
-          `insert into board_members(board_id,user_id,role)
-           values ($1,$2,'admin')`,
-          [legacyBoard, legacyUser],
-        );
-        await legacyClient.query(
-          `insert into columns(id,board_id,name,position)
-           values ($1,$2,'Legacy column',1)`,
-          [legacyColumn, legacyBoard],
-        );
-        await legacyClient.query(
-          `insert into tasks(id,board_id,column_id,title,author_id,position)
-           values ($1,$2,$3,'Legacy task',$4,1)`,
-          [legacyTask, legacyBoard, legacyColumn, legacyUser],
-        );
-      } finally {
-        legacyClient.release();
-      }
+        await runMigrations(legacyPool);
+        await runMigrations(legacyPool);
 
-      await runMigrations(legacyPool);
-      await runMigrations(legacyPool);
-
-      const upgraded = await legacyPool.query<{ title: string }>(
-        'select title from tasks where title = $1',
-        ['Legacy task'],
-      );
-      expect(upgraded.rows).toEqual([{ title: 'Legacy task' }]);
-      await legacyPool.query(
-        `insert into task_comments(id,task_id,author_id,body)
+        const upgraded = await legacyPool.query<{ title: string }>(
+          'select title from tasks where title = $1',
+          ['Legacy task'],
+        );
+        expect(upgraded.rows).toEqual([{ title: 'Legacy task' }]);
+        expect(
+          (await legacyPool.query('select * from contribution_events')).rows,
+        ).toEqual([]);
+        expect(
+          (await legacyPool.query('select * from user_profiles')).rows,
+        ).toEqual([]);
+        await legacyPool.query(
+          `insert into task_comments(id,task_id,author_id,body)
          select $1,id,author_id,'Первый комментарий'
          from tasks where title = 'Legacy task'`,
-        [crypto.randomUUID()],
-      );
-      await expect(
-        legacyPool.query(
-          `insert into task_comments(id,task_id,author_id,body)
+          [crypto.randomUUID()],
+        );
+        await expect(
+          legacyPool.query(
+            `insert into task_comments(id,task_id,author_id,body)
            select $1,id,author_id,'   '
            from tasks where title = 'Legacy task'`,
-          [crypto.randomUUID()],
-        ),
-      ).rejects.toThrow();
-    } finally {
-      await legacyPool.end();
-      await testPool.query(`drop schema if exists "${schema}" cascade`);
-    }
-  });
+            [crypto.randomUUID()],
+          ),
+        ).rejects.toThrow();
+      } finally {
+        await legacyPool.end();
+        await testPool.query(`drop schema if exists "${schema}" cascade`);
+      }
+    },
+  );
 
   it('uses superadmin, admin, and user account roles and defaults to user', async () => {
     const roles = await client.query<{ enumlabel: string }>(
@@ -306,6 +315,45 @@ database('PostgreSQL invariants', () => {
         [crypto.randomUUID(), crypto.randomUUID(), userA],
       ),
     ).rejects.toMatchObject({ code: '23503' });
+  });
+  it('awards creation and first completion once, including legacy SQL writers', async () => {
+    const taskId = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,position)
+       values($1,$2,$3,'Contribution',$4,$4,1)`,
+      [taskId, boardA, columnA, userA],
+    );
+    expect(
+      (
+        await client.query(
+          'select kind,points from contribution_events where task_id=$1',
+          [taskId],
+        )
+      ).rows,
+    ).toEqual([{ kind: 'created', points: 2 }]);
+    await client.query('update tasks set completed_at=now() where id=$1', [
+      taskId,
+    ]);
+    await client.query('update tasks set completed_at=null where id=$1', [
+      taskId,
+    ]);
+    await client.query('update tasks set completed_at=now() where id=$1', [
+      taskId,
+    ]);
+    const points = await client.query(
+      'select sum(points)::int as total,count(*)::int as count from contribution_events where task_id=$1',
+      [taskId],
+    );
+    expect(points.rows[0]).toEqual({ total: 12, count: 2 });
+    await client.query('delete from tasks where id=$1', [taskId]);
+    expect(
+      (
+        await client.query(
+          'select * from contribution_events where task_id=$1',
+          [taskId],
+        )
+      ).rowCount,
+    ).toBe(0);
   });
 
   it('rejects simultaneous user and typed-name assignees', async () => {

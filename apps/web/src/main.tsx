@@ -60,10 +60,12 @@ import {
 } from '@tanstack/react-query';
 import {
   Archive,
+  ArrowRight,
   CalendarClock,
   Check,
   ChevronLeft,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   Clock3,
   Columns3,
@@ -97,6 +99,7 @@ import '@mantine/core/styles.css';
 import '@mantine/dates/styles.css';
 import 'dayjs/locale/ru';
 import './styles.css';
+import { TeamProgress } from './TeamProgress';
 type AccountRole = 'superadmin' | 'admin' | 'user';
 type User = {
   id: string;
@@ -1410,6 +1413,28 @@ function QuickAdd({
     </form>
   );
 }
+function useCollapsedPreference(key: string) {
+  const [value, setValue] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem(`kanban.collapse.v1.${key}`) === 'true'
+      );
+    } catch {
+      return false;
+    }
+  });
+  const update = (next: boolean) => {
+    setValue(next);
+    try {
+      if (next)
+        window.localStorage.setItem(`kanban.collapse.v1.${key}`, 'true');
+      else window.localStorage.removeItem(`kanban.collapse.v1.${key}`);
+    } catch {
+      /* Collapsing still works when browser storage is unavailable. */
+    }
+  };
+  return [value, update] as const;
+}
 function Card({
   task,
   data,
@@ -1419,6 +1444,7 @@ function Card({
   data: Payload;
   open: () => void;
 }) {
+  const [collapsed, setCollapsed] = useCollapsedPreference(`task.${task.id}`);
   const [start, setStart] = useState<Date | null>(
       task.activeTimer?.startedAt ? new Date(task.activeTimer.startedAt) : null,
     ),
@@ -1453,13 +1479,22 @@ function Card({
   return (
     <div
       ref={setNodeRef}
-      className={`card${isDragging ? ' dragging' : ''}`}
+      className={`card${isDragging ? ' dragging' : ''}${collapsed ? ' card-collapsed' : ''}`}
       style={style}
       data-testid="task-card"
     >
       <button className="card-open" onClick={open}>
         <CardBody task={task} data={data} startedAt={start} />
       </button>
+      <ActionIcon
+        className="card-collapse"
+        variant="subtle"
+        aria-label={`${collapsed ? 'Развернуть' : 'Свернуть'} задачу «${task.title}»`}
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+      </ActionIcon>
       {!task.archivedAt && (
         <ActionIcon
           ref={setActivatorNodeRef}
@@ -1492,19 +1527,7 @@ function CardBody({
       (assignee ? personLabel(assignee) : undefined) ?? task.assigneeName ?? '',
     authorLabel = personLabel(task.author),
     topic = data.topics?.find((item) => item.id === task.topicId),
-    initials = assigneeLabel
-      .split(/[\s@._-]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join(''),
-    hasMetadata = Boolean(
-      task.dueAt ||
-      task.estimatedMinutes ||
-      startedAt ||
-      assigneeLabel ||
-      task.author,
-    );
+    hasMetadata = Boolean(task.dueAt || task.estimatedMinutes || startedAt);
   return (
     <>
       {Boolean(topic || task.labels?.length) && (
@@ -1535,6 +1558,18 @@ function CardBody({
       {task.description && (
         <span className="card-description">{task.description}</span>
       )}
+      <span className="card-people">
+        <span title={`Автор: ${authorLabel}`}>
+          <UserRound size={13} />
+          <span>{authorLabel}</span>
+        </span>
+        <ArrowRight size={18} className="assignment-arrow" aria-hidden="true" />
+        <span
+          title={`Исполнитель: ${assigneeLabel || 'Не назначен'}${task.assigneeName ? ' · без учётной записи' : ''}`}
+        >
+          <span>{assigneeLabel || 'Не назначен'}</span>
+        </span>
+      </span>
       {hasMetadata && (
         <footer>
           {task.dueAt && (
@@ -1551,22 +1586,6 @@ function CardBody({
             <i className="run">
               <Timer size={13} />{' '}
               {duration((Date.now() - startedAt.getTime()) / 1000)}
-            </i>
-          )}
-          {assigneeLabel && (
-            <i
-              className={`avatar${assignee ? '' : ' text-assignee'}`}
-              title={assignee ? assigneeLabel : `${assigneeLabel} · имя`}
-            >
-              {initials}
-            </i>
-          )}
-          {task.author && (
-            <i
-              className="card-meta card-author"
-              title={`Автор: ${authorLabel}`}
-            >
-              <UserRound size={13} /> {authorLabel}
             </i>
           )}
         </footer>
@@ -1611,6 +1630,9 @@ function KanbanColumn({
   open: (task: Task) => void;
   refresh: () => Promise<unknown>;
 }) {
+  const [collapsed, setCollapsed] = useCollapsedPreference(
+    `column.${column.id}`,
+  );
   const { isOver, setNodeRef } = useDroppable({
     id: `column:${column.id}`,
     data: { type: 'column', columnId: column.id },
@@ -1641,13 +1663,23 @@ function KanbanColumn({
   return (
     <article
       ref={setNodeRef}
-      className={`column${isOver ? ' drop-target' : ''}`}
+      className={`column${isOver ? ' drop-target' : ''}${collapsed ? ' column-collapsed' : ''}`}
       data-testid="kanban-column"
     >
       <header>
         <h2>{column.name}</h2>
         <div className="column-header-actions">
-          <span aria-label={`Задач: ${tasks.length}`}>{tasks.length}</span>
+          <span className="task-count" aria-label={`Задач: ${tasks.length}`}>
+            {tasks.length}
+          </span>
+          <ActionIcon
+            variant="subtle"
+            aria-label={`${collapsed ? 'Развернуть' : 'Свернуть'} колонку ${column.name}`}
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed(!collapsed)}
+          >
+            {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+          </ActionIcon>
           {canManage && (
             <Menu position="bottom-end" withinPortal>
               <Menu.Target>
@@ -1793,15 +1825,28 @@ function KanbanColumn({
           {columnError}
         </small>
       )}
-      <QuickAdd board={boardId} column={column.id} refresh={refresh} />
-      <SortableContext
-        items={tasks.map((task) => task.id)}
-        strategy={verticalListSortingStrategy}
-      >
-        {tasks.map((task) => (
-          <Card task={task} data={data} key={task.id} open={() => open(task)} />
-        ))}
-      </SortableContext>
+      {collapsed && (
+        <p className="collapsed-column-hint">
+          {tasks.length} задач скрыто. Перетащите задачу сюда или разверните
+          колонку.
+        </p>
+      )}
+      <div className="column-tasks" hidden={collapsed}>
+        <QuickAdd board={boardId} column={column.id} refresh={refresh} />
+        <SortableContext
+          items={tasks.map((task) => task.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {tasks.map((task) => (
+            <Card
+              task={task}
+              data={data}
+              key={task.id}
+              open={() => open(task)}
+            />
+          ))}
+        </SortableContext>
+      </div>
     </article>
   );
 }
@@ -4383,6 +4428,11 @@ function Workspace({
         <span data-testid="user-email" className="visually-hidden">
           {user.email}
         </span>
+        <TeamProgress
+          user={user}
+          updateUser={updateCurrentUser}
+          request={api}
+        />
         <UserMenu
           user={user}
           logout={logout}

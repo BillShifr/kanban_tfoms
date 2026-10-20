@@ -545,6 +545,149 @@ export async function buildApp() {
     const u = await user(r, reply);
     if (u) return { user: u };
   });
+  app.get('/profile', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const result = await pool.query(
+      'select bio, avatar is not null as "hasAvatar" from user_profiles where user_id=$1',
+      [u.id],
+    );
+    return {
+      user: u,
+      bio: result.rows[0]?.bio ?? '',
+      hasAvatar: result.rows[0]?.hasAvatar ?? false,
+    };
+  });
+  app.patch('/profile', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const p = z
+      .object({
+        firstName: z.string().trim().max(80),
+        lastName: z.string().trim().max(80),
+        bio: z.string().trim().max(240),
+      })
+      .strict()
+      .safeParse(r.body);
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    await db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({
+          firstName: p.data.firstName || null,
+          lastName: p.data.lastName || null,
+        })
+        .where(eq(users.id, u.id));
+      await tx.execute(
+        sql`insert into user_profiles(user_id,bio) values(${u.id},${p.data.bio}) on conflict(user_id) do update set bio=excluded.bio`,
+      );
+    });
+    return {
+      user: {
+        ...u,
+        firstName: p.data.firstName || null,
+        lastName: p.data.lastName || null,
+      },
+    };
+  });
+  app.post('/profile/avatar', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const file = await r.file({ limits: { fileSize: 524288, files: 1 } });
+    if (!file) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const bytes = await file.toBuffer();
+    const valid =
+      (file.mimetype === 'image/jpeg' &&
+        bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) ||
+      (file.mimetype === 'image/png' &&
+        bytes
+          .subarray(0, 8)
+          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+      (file.mimetype === 'image/webp' &&
+        bytes.subarray(0, 4).toString() === 'RIFF' &&
+        bytes.subarray(8, 12).toString() === 'WEBP');
+    if (!valid) return reply.code(400).send({ code: 'INVALID_IMAGE' });
+    await pool.query(
+      'insert into user_profiles(user_id,avatar,avatar_type) values($1,$2,$3) on conflict(user_id) do update set avatar=excluded.avatar,avatar_type=excluded.avatar_type',
+      [u.id, bytes, file.mimetype],
+    );
+    return reply.code(204).send();
+  });
+  app.delete('/profile/avatar', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    await pool.query(
+      'update user_profiles set avatar=null, avatar_type=null where user_id=$1',
+      [u.id],
+    );
+    return reply.code(204).send();
+  });
+  app.get('/profile/avatar/:userId', async (r, reply) => {
+    const u = await user(r, reply),
+      target = id(r, 'userId');
+    if (!u) return;
+    if (!target.success) return reply.code(404).send({ code: 'NOT_FOUND' });
+    // Avatars contain no task or permission data; only authenticated users can read.
+    const result = await pool.query(
+      'select p.avatar,p.avatar_type from user_profiles p join users u on u.id=p.user_id where p.user_id=$1 and u.archived_at is null',
+      [target.data],
+    );
+    if (!result.rows[0]?.avatar)
+      return reply.code(404).send({ code: 'NOT_FOUND' });
+    return reply
+      .type(result.rows[0].avatar_type)
+      .header('cache-control', 'private, no-store')
+      .send(result.rows[0].avatar);
+  });
+  app.get('/progress', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const scope = z
+      .object({ scope: z.enum(['visible', 'global']).default('visible') })
+      .safeParse(r.query);
+    if (!scope.success)
+      return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const result = await pool.query(
+      `with visible_events as (
+        select e.* from contribution_events e
+        join tasks t on t.id=e.task_id join boards b on b.id=t.board_id
+        where b.archived_at is null and (e.kind='created' or t.completed_at is not null)
+        and ($2::boolean
+          or exists(select 1 from board_members bm where bm.board_id=b.id and bm.user_id=$1)
+          or exists(select 1 from department_members dm where dm.department_id=b.department_id and dm.user_id=$1))
+      )
+      select u.id,u.first_name as "firstName",u.last_name as "lastName",u.email,
+        (p.avatar is not null) as "hasAvatar",
+        coalesce(sum(e.points) filter(where e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC'),0)::int as points,
+        count(*) filter(where e.kind='created')::int as created,
+        count(*) filter(where e.kind='completed')::int as completed
+      from users u left join visible_events e on e.user_id=u.id
+      left join user_profiles p on p.user_id=u.id
+      where u.archived_at is null and ($3::boolean or e.user_id is not null)
+      group by u.id,p.avatar order by points desc, completed desc,u.id`,
+      [
+        u.id,
+        isElevated(u.role) || scope.data.scope === 'global',
+        scope.data.scope === 'global',
+      ],
+    );
+    return {
+      scope:
+        scope.data.scope === 'global'
+          ? 'Все сотрудники'
+          : 'Доступные вам доски',
+      period: new Date().toISOString().slice(0, 7),
+      leaders: result.rows.slice(0, 20),
+      me: result.rows.find((row) => row.id === u.id) ?? {
+        ...u,
+        points: 0,
+        created: 0,
+        completed: 0,
+        hasAvatar: false,
+      },
+      participants: result.rows.length,
+    };
+  });
   app.post('/auth/sign-in', async (r, reply) => {
     const p = credentials.safeParse(r.body);
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
