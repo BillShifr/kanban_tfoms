@@ -47,9 +47,7 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page.getByRole('textbox', { name: 'Email', exact: true }).fill(email);
     await page.getByLabel('Пароль').fill(password);
     await page.getByRole('button', { name: 'Войти', exact: true }).click();
-    await expect(
-      page.getByRole('button', { name: 'Мой профиль' }),
-    ).toBeVisible();
+    await expect(page.locator('.user-menu-trigger')).toBeVisible();
 
     const visible = await (
       await page.request.get('/api/progress?scope=visible')
@@ -59,6 +57,16 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     expect(globalResponse.status()).toBe(200);
     const global = await globalResponse.json();
     expect(global.participants).toBeGreaterThan(0);
+    const places = new Map<number, number>();
+    for (const person of global.leaders) {
+      expect(person.points).toBe(
+        person.monthCreated * 2 + person.monthCompleted * 10,
+      );
+      if (person.points === 0) expect(person.rank).toBeNull();
+      else if (places.has(person.points))
+        expect(person.rank).toBe(places.get(person.points));
+      else places.set(person.points, person.rank);
+    }
     expect(JSON.stringify(global)).not.toContain(board.id);
     expect(JSON.stringify(global)).not.toContain(`Secret task ${suffix}`);
     expect((await page.request.get(`/api/boards/${board.id}`)).status()).toBe(
@@ -68,8 +76,8 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       (await page.request.get('/api/progress?scope=invalid')).status(),
     ).toBe(400);
 
-    await page.getByRole('button', { name: /Пульс команды/ }).click();
-    const drawer = page.getByRole('dialog', { name: 'Пульс команды' });
+    await page.locator(isMobile ? '.team-mobile-bar' : '.team-open').click();
+    const drawer = page.getByRole('dialog', { name: 'Команда и достижения' });
     await drawer.getByText('Все сотрудники', { exact: true }).first().click();
     await expect(
       drawer.getByText(
@@ -80,9 +88,15 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await expect(
       drawer.getByText(/Первый результат ещё впереди/),
     ).toBeVisible();
+    await drawer.getByRole('button', { name: /Первый шаг/ }).click();
+    const condition = page.getByRole('dialog', { name: 'Условие достижения' });
+    await expect(condition.getByText('0 из 1 · В процессе')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeVisible();
     await page.keyboard.press('Escape');
 
-    await page.getByRole('button', { name: 'Мой профиль' }).click();
+    await page.locator('.user-menu-trigger').click();
+    await page.getByRole('menuitem', { name: 'Мой профиль' }).click();
     const profile = page.getByRole('dialog', { name: /профиль/i });
     await profile.getByLabel('Фамилия', { exact: true }).fill('Тестов');
     await profile.getByLabel('Имя', { exact: true }).fill('Иван');
@@ -177,7 +191,14 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     const scored = await (
       await page.request.get('/api/progress?scope=visible')
     ).json();
-    expect(scored.me).toMatchObject({ points: 12, created: 1, completed: 1 });
+    expect(scored.me).toMatchObject({
+      points: 12,
+      created: 1,
+      completed: 1,
+      monthCreated: 1,
+      monthCompleted: 1,
+      rank: 1,
+    });
     await page.reload();
     const title = `My contribution ${suffix}`;
     await page

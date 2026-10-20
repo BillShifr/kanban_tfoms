@@ -24,6 +24,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   ActionIcon,
+  Avatar,
   Badge,
   Button,
   Checkbox,
@@ -524,13 +525,19 @@ function UserMenu({
   logout,
   openArchivedBoards,
   openUsers,
+  openProfile,
 }: {
   user: User;
   logout: () => void;
   openArchivedBoards: () => void;
   openUsers: () => void;
+  openProfile: () => void;
 }) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
+  const profile = useQuery<{ hasAvatar: boolean }>({
+    queryKey: ['profile', user.id],
+    queryFn: () => api('/profile'),
+  });
   const themes = [
     { value: 'auto', label: 'Системное', icon: SunMoon },
     { value: 'light', label: 'Светлое', icon: Sun },
@@ -543,12 +550,27 @@ function UserMenu({
           variant="subtle"
           color="gray"
           className="user-menu-trigger"
+          leftSection={
+            <Avatar
+              size={28}
+              radius="xl"
+              src={
+                profile.data?.hasAvatar
+                  ? `/api/profile/avatar/${user.id}?v=${profile.dataUpdatedAt}`
+                  : undefined
+              }
+            >
+              {personLabel(user).slice(0, 1)}
+            </Avatar>
+          }
           rightSection={<ChevronDown size={15} />}
         >
           {personLabel(user)}
         </Button>
       </Menu.Target>
       <Menu.Dropdown>
+        <Menu.Item onClick={openProfile}>Мой профиль</Menu.Item>
+        <Menu.Divider />
         <Menu.Label>Оформление</Menu.Label>
         {themes.map((item) => {
           const Icon = item.icon;
@@ -1667,11 +1689,13 @@ function KanbanColumn({
       data-testid="kanban-column"
     >
       <header>
-        <h2>{column.name}</h2>
-        <div className="column-header-actions">
+        <div className="column-title-group">
+          <h2>{column.name}</h2>
           <span className="task-count" aria-label={`Задач: ${tasks.length}`}>
             {tasks.length}
           </span>
+        </div>
+        <div className="column-header-actions">
           <ActionIcon
             variant="subtle"
             aria-label={`${collapsed ? 'Развернуть' : 'Свернуть'} колонку ${column.name}`}
@@ -4056,6 +4080,7 @@ function Workspace({
     [settings, setSettings] = useState(false),
     [archiveOpen, setArchiveOpen] = useState(false),
     [usersOpen, setUsersOpen] = useState(false),
+    [profileOpen, setProfileOpen] = useState(false),
     [mobileSidebarOpen, setMobileSidebarOpen] = useState(false),
     [sidebarCollapsed, setSidebarCollapsed] = useState(
       () => window.localStorage.getItem('kanban.sidebar-collapsed') === 'true',
@@ -4428,18 +4453,21 @@ function Workspace({
         <span data-testid="user-email" className="visually-hidden">
           {user.email}
         </span>
-        <TeamProgress
-          user={user}
-          updateUser={updateCurrentUser}
-          request={api}
-        />
         <UserMenu
           user={user}
           logout={logout}
           openArchivedBoards={() => setArchiveOpen(true)}
           openUsers={() => setUsersOpen(true)}
+          openProfile={() => setProfileOpen(true)}
         />
       </header>
+      <TeamProgress
+        user={user}
+        updateUser={updateCurrentUser}
+        request={api}
+        profileOpen={profileOpen}
+        closeProfile={() => setProfileOpen(false)}
+      />
       <aside className="workspace-sidebar" data-testid="desktop-sidebar">
         <div className="sidebar-toolbar">
           <ActionIcon
@@ -4665,6 +4693,9 @@ function Workspace({
             {moveError && <p role="alert">{moveError}</p>}
             <DndContext
               sensors={sensors}
+              // With a supporting rail, 20% would scroll inside a target column.
+              // Keep automatic scrolling available only near the horizontal edge.
+              autoScroll={{ threshold: { x: 0.06, y: 0.2 } }}
               collisionDetection={taskCollisionDetection}
               onDragStart={({ active }) => setActiveDragId(String(active.id))}
               onDragCancel={() => setActiveDragId(null)}

@@ -314,10 +314,7 @@ test.describe('core board workflow', () => {
       page.getByTestId('kanban-column').first().locator('header h2'),
     );
     await expectReadableText(
-      page
-        .getByTestId('kanban-column')
-        .first()
-        .locator('.column-header-actions > span'),
+      page.getByTestId('kanban-column').first().locator('.task-count'),
     );
     await expectReadableText(
       page.getByPlaceholder('Поиск по задачам'),
@@ -470,22 +467,26 @@ test.describe('core board workflow', () => {
     const headerBox = await header.boundingBox();
     const columnBox = await firstColumn.boundingBox();
     expect(headerBox?.height).toBeGreaterThanOrEqual(48);
-    // The mobile header has a dedicated second row for profile and progress.
-    expect(headerBox?.height).toBe(metrics.viewport <= 760 ? 104 : 56);
-    const progressBox = await header
-      .getByRole('button', { name: /Пульс команды/ })
-      .boundingBox();
-    const profileBox = await header
-      .getByRole('button', { name: 'Мой профиль' })
-      .boundingBox();
-    expect(progressBox).not.toBeNull();
+    // Profile belongs to the right-hand user menu; achievements have their own region.
+    expect(headerBox?.height).toBe(56);
+    const profileBox = await header.locator('.user-menu-trigger').boundingBox();
     expect(profileBox).not.toBeNull();
-    expect(progressBox!.x + progressBox!.width).toBeLessThanOrEqual(
-      profileBox!.x,
+    expect(profileBox!.x + profileBox!.width).toBeGreaterThanOrEqual(
+      metrics.viewport - 20,
     );
     expect(profileBox!.x + profileBox!.width).toBeLessThanOrEqual(
       metrics.viewport,
     );
+    if (metrics.viewport > 1100) {
+      const rail = page.getByRole('complementary', {
+        name: 'Команда и достижения',
+      });
+      await expect(rail).toBeVisible();
+      const railBox = await rail.boundingBox();
+      expect(railBox!.x).toBeGreaterThan(columnBox!.x);
+    } else {
+      await expect(page.locator('.team-mobile-bar')).toBeVisible();
+    }
     expect(columnBox?.width).toBeGreaterThanOrEqual(280);
     expect(columnBox?.width).toBeLessThanOrEqual(340);
   });

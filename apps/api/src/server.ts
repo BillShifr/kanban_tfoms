@@ -659,6 +659,8 @@ export async function buildApp() {
       select u.id,u.first_name as "firstName",u.last_name as "lastName",u.email,
         (p.avatar is not null) as "hasAvatar",
         coalesce(sum(e.points) filter(where e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC'),0)::int as points,
+        count(*) filter(where e.kind='created' and e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC')::int as "monthCreated",
+        count(*) filter(where e.kind='completed' and e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC')::int as "monthCompleted",
         count(*) filter(where e.kind='created')::int as created,
         count(*) filter(where e.kind='completed')::int as completed
       from users u left join visible_events e on e.user_id=u.id
@@ -671,18 +673,27 @@ export async function buildApp() {
         scope.data.scope === 'global',
       ],
     );
+    const places = new Map<number, number>();
+    const ranked = result.rows.map((row, index) => {
+      if (row.points > 0 && !places.has(row.points))
+        places.set(row.points, index + 1);
+      return { ...row, rank: places.get(row.points) ?? null };
+    });
     return {
       scope:
         scope.data.scope === 'global'
           ? 'Все сотрудники'
           : 'Доступные вам доски',
       period: new Date().toISOString().slice(0, 7),
-      leaders: result.rows.slice(0, 20),
-      me: result.rows.find((row) => row.id === u.id) ?? {
+      leaders: ranked.slice(0, 20),
+      me: ranked.find((row) => row.id === u.id) ?? {
         ...u,
         points: 0,
         created: 0,
         completed: 0,
+        monthCreated: 0,
+        monthCompleted: 0,
+        rank: null,
         hasAvatar: false,
       },
       participants: result.rows.length,

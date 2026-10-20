@@ -1,10 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Avatar,
   Badge,
   Button,
-  Drawer,
   FileInput,
   Group,
   Modal,
@@ -15,7 +14,7 @@ import {
   Textarea,
   TextInput,
 } from '@mantine/core';
-import { Award, Flag, Sparkles, Target, Trophy, UserRound } from 'lucide-react';
+import { ArrowUpRight, Check, ChevronRight, UserRound } from 'lucide-react';
 
 type Member = {
   id: string;
@@ -29,6 +28,9 @@ type Contributor = Member & {
   created: number;
   completed: number;
   hasAvatar: boolean;
+  monthCreated: number;
+  monthCompleted: number;
+  rank: number | null;
 };
 type ProgressData = {
   leaders: Contributor[];
@@ -47,56 +49,99 @@ const milestones = [
     description: 'Создать первую задачу',
     key: 'created' as const,
     goal: 1,
-    icon: Flag,
-    tone: 'blue',
+    art: 'initiative',
   },
   {
     title: 'Довести до результата',
     description: 'Завершить первую задачу',
     key: 'completed' as const,
     goal: 1,
-    icon: Target,
-    tone: 'green',
+    art: 'result',
   },
   {
     title: 'Надёжное плечо',
     description: 'Завершить 10 задач',
     key: 'completed' as const,
     goal: 10,
-    icon: Award,
-    tone: 'violet',
+    art: 'bridge',
   },
   {
     title: 'Мастер результата',
     description: 'Завершить 50 задач',
     key: 'completed' as const,
     goal: 50,
-    icon: Trophy,
-    tone: 'amber',
+    art: 'summit',
   },
 ];
 
 function Achievements({ person }: { person: Contributor }) {
+  const [selected, setSelected] = useState<(typeof milestones)[number] | null>(
+    null,
+  );
   return (
-    <div className="achievement-grid">
-      {milestones.map(({ title, description, key, goal, icon: Icon, tone }) => {
-        const earned = person[key] >= goal;
-        return (
-          <div className={`achievement ${earned ? 'earned' : ''}`} key={title}>
-            <span className={`achievement-medal ${tone}`}>
-              <Icon size={24} strokeWidth={1.8} />
-            </span>
-            <strong>{title}</strong>
-            <small>{description}</small>
-            <Progress
-              value={Math.min(100, (person[key] / goal) * 100)}
-              aria-label={`${title}: ${person[key]} из ${goal}`}
+    <>
+      <div className="achievement-grid">
+        {milestones.map((milestone) => {
+          const { title, description, key, goal, art } = milestone;
+          const earned = person[key] >= goal;
+          return (
+            <button
+              type="button"
+              onClick={() => setSelected(milestone)}
+              className={`achievement ${earned ? 'earned' : ''}`}
+              key={title}
+            >
+              <img
+                src={`/achievements/${art}.png`}
+                alt=""
+                width={100}
+                height={100}
+              />
+              <strong>{title}</strong>
+              <small>{description}</small>
+              <Progress
+                value={Math.min(100, (person[key] / goal) * 100)}
+                aria-label={`${title}: ${person[key]} из ${goal}`}
+              />
+              <span>
+                {earned ? 'Достигнуто' : `${person[key]} / ${goal}`} · Подробнее
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <Modal
+        opened={!!selected}
+        onClose={() => setSelected(null)}
+        title="Условие достижения"
+        centered
+        size={440}
+      >
+        {selected && (
+          <div className="achievement-detail">
+            <img
+              src={`/achievements/${selected.art}.png`}
+              alt=""
+              width={160}
+              height={160}
             />
-            <span>{earned ? 'Достигнуто' : `${person[key]} / ${goal}`}</span>
+            <h2>{selected.title}</h2>
+            <p>{selected.description}</p>
+            <strong>
+              {person[selected.key]} из {selected.goal} ·{' '}
+              {person[selected.key] >= selected.goal
+                ? 'Достигнуто'
+                : 'В процессе'}
+            </strong>
+            <p>
+              За всё время учёта в выбранной области. Возврат задачи в работу,
+              удаление или изменение доступа могут изменить прогресс. Сам значок
+              не добавляет баллов.
+            </p>
           </div>
-        );
-      })}
-    </div>
+        )}
+      </Modal>
+    </>
   );
 }
 
@@ -299,14 +344,32 @@ export function TeamProgress({
   user,
   updateUser,
   request,
+  profileOpen,
+  closeProfile,
 }: {
   user: Member;
   updateUser: (user: Member) => void;
   request: Request;
+  profileOpen: boolean;
+  closeProfile: () => void;
 }) {
   const queryClient = useQueryClient();
+  useEffect(
+    () =>
+      queryClient.getQueryCache().subscribe((event) => {
+        if (
+          event.type === 'updated' &&
+          event.action.type === 'success' &&
+          event.query.queryKey[0] === 'board'
+        ) {
+          void queryClient.invalidateQueries({
+            queryKey: ['progress', user.id],
+          });
+        }
+      }),
+    [queryClient, user.id],
+  );
   const [opened, setOpened] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [scope, setScope] = useState<'visible' | 'global'>('visible');
@@ -326,122 +389,221 @@ export function TeamProgress({
       queryClient.invalidateQueries({ queryKey: ['progress'] }),
       queryClient.invalidateQueries({ queryKey: ['board'] }),
     ]);
+  const data = progress.data;
+  const period = data
+    ? new Intl.DateTimeFormat('ru-RU', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }).format(new Date(`${data.period}-01T00:00:00Z`))
+    : 'Текущий месяц';
+  const scopeControl = (
+    <SegmentedControl
+      fullWidth
+      aria-label="Область рейтинга"
+      value={scope}
+      onChange={(value) => setScope(value as 'visible' | 'global')}
+      data={[
+        { value: 'visible', label: 'Доступные доски' },
+        { value: 'global', label: 'Все сотрудники' },
+      ]}
+    />
+  );
+  const loadState = progress.isError ? (
+    <div className="team-load-state">
+      <Text size="sm" role="alert">
+        {data
+          ? 'Не удалось обновить данные. Показан предыдущий результат.'
+          : 'Не удалось загрузить достижения.'}
+      </Text>
+      <Button size="xs" variant="light" onClick={() => void progress.refetch()}>
+        Повторить
+      </Button>
+    </div>
+  ) : !data ? (
+    <Text role="status" size="sm">
+      Загружаем вклад команды…
+    </Text>
+  ) : null;
+  const next = data && milestones.find((m) => data.me[m.key] < m.goal);
+  const leaders = (limit: number) =>
+    data && (
+      <ol className="leader-list">
+        {data.leaders.slice(0, limit).map((person) => (
+          <li key={person.id} className={person.id === user.id ? 'is-me' : ''}>
+            <span className="leader-position">{person.rank ?? '—'}</span>
+            <Avatar
+              size={32}
+              radius="xl"
+              src={
+                person.hasAvatar
+                  ? `/api/profile/avatar/${person.id}`
+                  : undefined
+              }
+            >
+              {name(person).slice(0, 1)}
+            </Avatar>
+            <div>
+              <strong title={name(person)}>
+                {name(person)}
+                {person.id === user.id ? ' · вы' : ''}
+              </strong>
+              <small>{person.monthCompleted} завершено за месяц</small>
+            </div>
+            <b>
+              {person.points}
+              <small>баллов</small>
+            </b>
+          </li>
+        ))}
+      </ol>
+    );
   return (
     <>
-      <div className="progress-header">
+      <aside className="team-rail" aria-label="Команда и достижения">
+        <div className="team-rail-heading">
+          <span className="eyebrow">ВМЕСТЕ К РЕЗУЛЬТАТУ</span>
+          <h2>Команда и достижения</h2>
+          <p>{period} · UTC</p>
+        </div>
+        {scopeControl}
+        {loadState}
+        {data && (
+          <>
+            <section className="team-score" aria-label="Ваш результат">
+              <span>Ваш вклад за месяц</span>
+              <div className="team-score-number">
+                <strong>{data.me.points}</strong>
+                <span>баллов</span>
+                <ArrowUpRight size={28} />
+              </div>
+              <div className="team-score-breakdown">
+                <span>
+                  <b>{data.me.monthCreated}</b> создано × 2
+                </span>
+                <span>
+                  <b>{data.me.monthCompleted}</b> завершено × 10
+                </span>
+              </div>
+              <p>
+                {data.me.rank
+                  ? `Место ${data.me.rank} из ${data.participants}`
+                  : 'Первое место в рейтинге начинается с первого действия'}
+              </p>
+            </section>
+            <button
+              className="next-achievement"
+              type="button"
+              onClick={() => setOpened(true)}
+            >
+              <img
+                src={`/achievements/${next ? next.art : 'summit'}.png`}
+                alt=""
+                width={78}
+                height={78}
+              />
+              <span>
+                <small>{next ? 'БЛИЖАЙШАЯ ЦЕЛЬ' : 'КОЛЛЕКЦИЯ СОБРАНА'}</small>
+                <strong>{next ? next.title : 'Все четыре достижения'}</strong>
+                <span>
+                  {next
+                    ? `${data.me[next.key]} / ${next.goal} · ${next.description}`
+                    : 'Посмотреть свои результаты'}
+                </span>
+              </span>
+              <ChevronRight size={16} />
+            </button>
+            <section className="team-leaders">
+              <div className="team-section-title">
+                <h3>Лидеры месяца</h3>
+                <span>{data.participants} участников</span>
+              </div>
+              {!data.leaders.length && (
+                <p className="team-empty">
+                  Первый результат ещё впереди. Создайте задачу или завершите
+                  назначенную.
+                </p>
+              )}
+              {leaders(3)}
+            </section>
+          </>
+        )}
         <Button
-          className="pulse-button"
-          variant="light"
-          leftSection={<Sparkles size={18} />}
-          onClick={() => {
-            setOpened(true);
-            void progress.refetch();
-          }}
+          className="team-open"
+          variant="default"
+          rightSection={<ArrowUpRight size={16} />}
+          onClick={() => setOpened(true)}
         >
-          Пульс команды <b>{progress.data?.me.points ?? '—'}</b>
+          Рейтинг и достижения
         </Button>
-        <Button
-          variant="subtle"
-          leftSection={<UserRound size={18} />}
-          onClick={() => setProfileOpen(true)}
-        >
-          Мой профиль
-        </Button>
-      </div>
-      <Drawer
+        <p className="team-footnote">
+          Признание вклада, не оценка труда.
+          <br />
+          Только агрегаты — без закрытых задач.
+        </p>
+      </aside>
+      <button
+        type="button"
+        className="team-mobile-bar"
+        onClick={() => setOpened(true)}
+      >
+        <img src="/achievements/initiative.png" alt="" width={32} height={32} />
+        <span>
+          <strong>Команда и достижения</strong>
+          <small>
+            {data
+              ? `${data.me.points} баллов за месяц · ${data.scope}`
+              : 'Посмотреть рейтинг и условия'}
+          </small>
+        </span>
+        <ChevronRight size={18} />
+      </button>
+      <Modal
         opened={opened}
         onClose={() => setOpened(false)}
-        position="right"
-        size={460}
-        title="Пульс команды"
-        classNames={{ content: 'progress-drawer' }}
+        size={760}
+        centered
+        title="Команда и достижения"
+        classNames={{ content: 'team-dialog' }}
       >
-        <SegmentedControl
-          fullWidth
-          mb="md"
-          aria-label="Область рейтинга"
-          value={scope}
-          onChange={(value) => setScope(value as 'visible' | 'global')}
-          data={[
-            { value: 'visible', label: 'Доступные доски' },
-            { value: 'global', label: 'Все сотрудники' },
-          ]}
-        />
-        <Text size="xs" c="dimmed" mb="md">
+        {scopeControl}
+        <Text size="sm" c="dimmed" my="md">
           {scope === 'global'
             ? 'Общий вклад сотрудников без раскрытия задач и закрытых досок.'
             : 'Вклад в доски, к которым у вас есть доступ.'}
         </Text>
-        {progress.isError ? (
-          <Stack>
-            <Text role="alert">Не удалось загрузить прогресс</Text>
-            <Button onClick={() => void progress.refetch()}>Повторить</Button>
-          </Stack>
-        ) : !progress.data ? (
-          <Text>Загружаем вклад команды…</Text>
-        ) : (
+        {loadState}
+        {data && (
           <>
-            <section className="pulse-hero">
-              <span className="eyebrow">
-                ВКЛАД ЗА МЕСЯЦ · {progress.data.period}
+            <div className="team-personal-strip">
+              <Check size={20} />
+              <strong>Ваш результат: {data.me.points} баллов</strong>
+              <span>
+                {data.me.rank ? `Место ${data.me.rank}` : 'Пока без места'} ·{' '}
+                {period}
               </span>
-              <div>
-                <strong>{progress.data.me.points}</strong>
-                <span>
-                  баллов
-                  <br />
-                  вашего вклада
-                </span>
-                <Sparkles size={42} />
-              </div>
+            </div>
+            <section className="team-collection">
+              <h2>Ваша коллекция</h2>
               <p>
-                {progress.data.scope} · Участников: {progress.data.participants}
+                За всё время учёта · {data.scope}. Нажмите на значок, чтобы
+                узнать условие.
               </p>
+              <Achievements person={data.me} />
             </section>
-            <section className="pulse-section">
-              <h2>Лидеры месяца</h2>
-              <p>{progress.data.scope}. Это вклад, не оценка труда.</p>
+            <section className="team-leaders">
+              <h2>Рейтинг месяца</h2>
+              <p>
+                Первые 20 участников · {data.participants} всего. Одинаковые
+                баллы — одинаковое место.
+              </p>
               {!progress.data.leaders.length && (
                 <Text>
                   Первый результат ещё впереди. Создайте задачу или завершите
                   назначенную.
                 </Text>
               )}
-              <ol className="leader-list">
-                {progress.data.leaders.map((person, i) => (
-                  <li
-                    key={person.id}
-                    className={person.id === user.id ? 'is-me' : ''}
-                  >
-                    <span className="leader-position">{i + 1}</span>
-                    <Avatar
-                      radius="xl"
-                      src={
-                        person.hasAvatar
-                          ? `/api/profile/avatar/${person.id}`
-                          : undefined
-                      }
-                    >
-                      {name(person).slice(0, 1)}
-                    </Avatar>
-                    <div>
-                      <strong>{name(person)}</strong>
-                      <small>
-                        Завершено: {person.completed} · Наград:{' '}
-                        {
-                          milestones.filter((m) => person[m.key] >= m.goal)
-                            .length
-                        }
-                      </small>
-                    </div>
-                    <b>{person.points}</b>
-                  </li>
-                ))}
-              </ol>
-            </section>
-            <section className="pulse-section">
-              <h2>Ваши ориентиры</h2>
-              <Achievements person={progress.data.me} />
+              {leaders(20)}
             </section>
             <details className="progress-rules">
               <summary>Как начисляются баллы</summary>
@@ -457,6 +619,12 @@ export function TeamProgress({
                 баллы завершения не выдаются.
               </p>
               <p>
+                При повторном закрытии возвращается исходное событие в его
+                исходный месяц. Смена исполнителя после закрытия не передаёт
+                баллы. Архивные доски и архивные учётные записи не участвуют;
+                восстановление доски возвращает её события.
+              </p>
+              <p>
                 Учёт начат с обновления; старые создания не восстановлены задним
                 числом. Месяц считается по UTC. Достижения считаются за всё
                 время учёта в выбранной области рейтинга; при изменении доступа
@@ -465,7 +633,7 @@ export function TeamProgress({
             </details>
           </>
         )}
-      </Drawer>
+      </Modal>
       <Modal
         opened={profileOpen}
         onClose={() => {
@@ -476,7 +644,7 @@ export function TeamProgress({
           )
             return;
           setProfileDirty(false);
-          setProfileOpen(false);
+          closeProfile();
         }}
         title="Мой профиль"
         centered
