@@ -12,6 +12,10 @@ test('creation controls wait for the real navigation data', async ({
     await ready;
     await route.continue();
   });
+  await page.route('**/api/boards', async (route) => {
+    await ready;
+    await route.continue();
+  });
   try {
     await page.goto('/');
     await page
@@ -33,6 +37,12 @@ test('creation controls wait for the real navigation data', async ({
       navigation.getByRole('button', { name: 'Создать доску', exact: true }),
     ).toHaveCount(0);
     release();
+    if (isMobile) {
+      await expect(page.locator('#board-title')).toBeVisible();
+      await expect(
+        navigation.getByRole('dialog', { name: 'Доски', exact: true }),
+      ).toBeVisible();
+    }
     await navigation
       .getByRole('button', { name: 'Создать отдел', exact: true })
       .click();

@@ -4159,13 +4159,13 @@ function Workspace({
       setDueFilter('');
       setShowArchived(false);
     },
-    selectBoard = (next: Board) => {
-      const focusBoardTitle = mobileSidebarOpen;
+    selectBoard = (next: Board, closeNavigation = true) => {
+      const focusBoardTitle = closeNavigation && mobileSidebarOpen;
       if (selected?.id !== next.id) resetFilters();
       setSelected(next);
       setOpen(null);
       setMoveError('');
-      setMobileSidebarOpen(false);
+      if (closeNavigation) setMobileSidebarOpen(false);
       const group = groups.find((item) =>
         item.boards.some((boardItem) => boardItem.id === next.id),
       );
@@ -4228,7 +4228,7 @@ function Workspace({
     const current = selected
       ? list.find((boardItem) => boardItem.id === selected.id)
       : undefined;
-    if (!current && list.length) selectBoard(list[0]);
+    if (!current && list.length) selectBoard(list[0], false);
     else if (!current) setSelected(null);
     else if (
       current.name !== selected?.name ||
