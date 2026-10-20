@@ -1309,6 +1309,79 @@ test.describe('core board workflow', () => {
     ).toHaveCount(0);
   });
 
+  test('keeps comments unread until the recipient opens the task', async ({
+    page,
+    browser,
+  }) => {
+    await signIn(page);
+    const other = await createAccount(
+      page,
+      uniqueEmail('commenter'),
+      'comments-pass-123',
+      'admin',
+    );
+    const department = await createDepartmentForTest(page);
+    const board = await createBoardApi(page, department.id);
+    const payload = await (
+      await page.request.get(`/api/boards/${board.id}`)
+    ).json();
+    const title = uniqueName('Непрочитанное обсуждение');
+    const { task } = await (
+      await page.request.post(`/api/boards/${board.id}/tasks`, {
+        data: { title, columnId: payload.columns[0].id, assigneeId: other.id },
+      })
+    ).json();
+    const context = await browser.newContext();
+    try {
+      await context.request.post(
+        `${new URL(page.url()).origin}/api/auth/sign-in`,
+        {
+          data: { email: other.email, password: 'comments-pass-123' },
+        },
+      );
+      const response = await context.request.post(
+        `${new URL(page.url()).origin}/api/boards/${board.id}/tasks/${task.id}/comments`,
+        {
+          data: { body: 'Нужна проверка результата' },
+        },
+      );
+      expect(response.status()).toBe(201);
+      const ownBoard = await (
+        await context.request.get(
+          `${new URL(page.url()).origin}/api/boards/${board.id}`,
+        )
+      ).json();
+      expect(ownBoard.columns[0].tasks[0].unreadComments).toBe(0);
+      await page.reload();
+      await selectBoard(page, board.name, department.name);
+      const card = taskCard(page, title);
+      await expect(card.getByLabel('Новые комментарии: 1')).toBeVisible();
+      await card.locator('.card-open').click();
+      await expect(page.getByTestId('task-comment')).toContainText(
+        'Нужна проверка результата',
+      );
+      await expect
+        .poll(async () => {
+          const data = await (
+            await page.request.get(`/api/boards/${board.id}`)
+          ).json();
+          return data.columns[0].tasks[0].unreadComments;
+        })
+        .toBe(0);
+      await page
+        .getByRole('button', { name: 'Закрыть задачу', exact: true })
+        .click();
+      await expect(card.locator('.task-unread')).toHaveCount(0);
+      await page.reload();
+      await selectBoard(page, board.name, department.name);
+      await expect(taskCard(page, title).locator('.task-unread')).toHaveCount(
+        0,
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   test('shows a task preview and lets participants discuss it', async ({
     page,
   }) => {

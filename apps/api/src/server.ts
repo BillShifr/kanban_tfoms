@@ -1168,8 +1168,21 @@ export async function buildApp() {
             isNull(timeEntries.stoppedAt),
           ),
         );
+    const unread = await pool.query<{ task_id: string; count: number }>(
+      `select c.task_id, count(*)::int as count
+       from task_comment_unread n
+       join task_comments c on c.id=n.comment_id
+       join tasks t on t.id=c.task_id
+       where n.user_id=$1 and t.board_id=$2
+       group by c.task_id`,
+      [u.id, p.data],
+    );
+    const unreadCounts = new Map(
+      unread.rows.map((row) => [row.task_id, row.count]),
+    );
     const ts = rawTasks.map((task) => ({
       ...task,
+      unreadComments: unreadCounts.get(task.id) ?? 0,
       labelIds: task.labels.map((label) => label.id),
       activeTimer: active.find((entry) => entry.taskId === task.id) ?? null,
     }));
@@ -1548,6 +1561,27 @@ export async function buildApp() {
         },
       })),
     };
+  });
+  app.post('/boards/:boardId/tasks/:taskId/comments/read', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      t = id(r, 'taskId'),
+      input = z
+        .object({ ids: z.array(z.string().uuid()).max(10000) })
+        .strict()
+        .safeParse(r.body);
+    if (!u) return;
+    if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+      return;
+    if (!input.success)
+      return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    await pool.query(
+      `delete from task_comment_unread n using task_comments c, tasks t
+       where n.comment_id=c.id and c.task_id=t.id and t.id=$1
+       and t.board_id=$2 and n.user_id=$3 and c.id=any($4::uuid[])`,
+      [t.data, b.data, u.id, input.data.ids],
+    );
+    return { ok: true };
   });
   app.post('/boards/:boardId/tasks/:taskId/comments', async (r, reply) => {
     const u = await user(r, reply),

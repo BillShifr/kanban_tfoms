@@ -534,6 +534,19 @@ a {
   right: 4px;
   top: 34px;
 }
+.task-unread {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: light-dark(#e8efff, #223a61);
+  color: light-dark(#194cb3, #b6d2ff);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
 .card-collapsed .card-description,
 .card-collapsed .card-tags,
 .card-collapsed .card-people,

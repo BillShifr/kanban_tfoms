@@ -77,6 +77,7 @@ import {
   History as HistoryIcon,
   KeyRound,
   Menu as MenuIcon,
+  MessageCircle,
   LogOut,
   Moon,
   MoreHorizontal,
@@ -147,6 +148,7 @@ function isImageAttachment(attachment: Attachment) {
 }
 type Task = {
   id: string;
+  unreadComments?: number;
   columnId: string;
   title: string;
   description: string;
@@ -1506,6 +1508,15 @@ function Card({
     >
       <button className="card-open" onClick={open}>
         <CardBody task={task} data={data} startedAt={start} />
+        {!!task.unreadComments && (
+          <span
+            className="task-unread"
+            aria-label={`Новые комментарии: ${task.unreadComments}`}
+          >
+            <MessageCircle size={14} aria-hidden="true" /> Новые сообщения ·{' '}
+            {task.unreadComments}
+          </span>
+        )}
       </button>
       <ActionIcon
         className="card-collapse"
@@ -2032,15 +2043,42 @@ function TaskComments({
   onDraftChange: (dirty: boolean) => void;
   onBusyChange: (busy: boolean) => void;
 }) {
+  const queryClient = useQueryClient();
+  const section = useRef<HTMLElement>(null);
   const comments = useQuery<{ comments: TaskComment[] }>({
       queryKey: ['task-comments', boardId, taskId],
       queryFn: () => api(`/boards/${boardId}/tasks/${taskId}/comments`),
+      refetchInterval: 15000,
     }),
     [body, setBody] = useState(''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  useEffect(() => {
+    if (
+      !comments.data ||
+      document.visibilityState !== 'visible' ||
+      !section.current?.getClientRects().length
+    )
+      return;
+    const ids = comments.data.comments.map((comment) => comment.id);
+    if (!ids.length) return;
+    void api(`/boards/${boardId}/tasks/${taskId}/comments/read`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    })
+      .then(() =>
+        queryClient.invalidateQueries({ queryKey: ['board', boardId] }),
+      )
+      .catch(() => {
+        /* Keep unread state until a successful acknowledgement. */
+      });
+  }, [comments.data, comments.dataUpdatedAt, boardId, taskId, queryClient]);
   return (
-    <section className="task-comments" aria-label="Обсуждение задачи">
+    <section
+      ref={section}
+      className="task-comments"
+      aria-label="Обсуждение задачи"
+    >
       <div className="section-heading">
         <div>
           <h2>Обсуждение</h2>
@@ -4205,7 +4243,7 @@ function Workspace({
         `/boards/${selected!.id}?archived=${showArchived ? 'true' : 'false'}`,
       ),
     enabled: !!selected,
-    refetchInterval: open ? 15000 : false,
+    refetchInterval: 15000,
   });
   const refresh = async () => {
     await q.invalidateQueries({ queryKey: ['board', selected?.id] });

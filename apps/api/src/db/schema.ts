@@ -292,6 +292,18 @@ export const taskComments = pgTable(
     ),
   ],
 );
+export const taskCommentUnread = pgTable(
+  'task_comment_unread',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    commentId: uuid('comment_id')
+      .notNull()
+      .references(() => taskComments.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.commentId] })],
+);
 export const attachments = pgTable(
   'attachments',
   {

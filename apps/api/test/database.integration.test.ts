@@ -120,7 +120,7 @@ database('PostgreSQL invariants', () => {
     }
   });
 
-  it.each(['0014_', '0015_', '0016_'])(
+  it.each(['0014_', '0015_', '0016_', '0018_'])(
     'upgrades a populated schema before %s without losing tasks',
     async (cutoff) => {
       const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -196,6 +196,12 @@ database('PostgreSQL invariants', () => {
            values ($1,$2,$3,'Legacy task',$4,1)`,
             [legacyTask, legacyBoard, legacyColumn, legacyUser],
           );
+          if (cutoff === '0018_') {
+            await legacyClient.query(
+              `insert into task_comments(id,task_id,author_id,body) values ($1,$2,$3,'Историческое обсуждение')`,
+              [crypto.randomUUID(), legacyTask, legacyUser],
+            );
+          }
         } finally {
           legacyClient.release();
         }
@@ -210,13 +216,21 @@ database('PostgreSQL invariants', () => {
         expect(upgraded.rows).toEqual([{ title: 'Legacy task' }]);
         expect(
           (await legacyPool.query('select * from contribution_events')).rows,
-        ).toHaveLength(cutoff === '0016_' ? 1 : 0);
+        ).toHaveLength(cutoff >= '0016_' ? 1 : 0);
         expect(
           (await legacyPool.query('select * from user_profiles')).rows,
         ).toEqual([]);
         expect(
           (await legacyPool.query('select code from earned_achievements')).rows,
-        ).toEqual(cutoff === '0016_' ? [{ code: 'initiative' }] : []);
+        ).toEqual(cutoff >= '0016_' ? [{ code: 'initiative' }] : []);
+        expect(
+          (await legacyPool.query('select * from task_comment_unread')).rows,
+        ).toEqual([]);
+        if (cutoff === '0018_') {
+          expect(
+            (await legacyPool.query('select body from task_comments')).rows,
+          ).toEqual([{ body: 'Историческое обсуждение' }]);
+        }
         await legacyPool.query(
           `insert into task_comments(id,task_id,author_id,body)
          select $1,id,author_id,'Первый комментарий'
@@ -237,6 +251,50 @@ database('PostgreSQL invariants', () => {
       }
     },
   );
+
+  it('notifies task recipients, excludes own comments and preserves concurrent unread messages', async () => {
+    const task = crypto.randomUUID();
+    const first = crypto.randomUUID();
+    const second = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,position)
+       values ($1,$2,$3,'Discussion',$4,$5,1)`,
+      [task, boardB, columnB, userA, userB],
+    );
+    await client.query(
+      `insert into task_comments(id,task_id,author_id,body) values ($1,$2,$3,'First'),($4,$2,$3,'Second')`,
+      [first, task, userB, second],
+    );
+    expect(
+      (
+        await client.query(
+          'select user_id from task_comment_unread where comment_id=$1',
+          [first],
+        )
+      ).rows,
+    ).toEqual([{ user_id: userA }]);
+    await client.query(
+      'delete from task_comment_unread where user_id=$1 and comment_id=$2',
+      [userA, first],
+    );
+    expect(
+      (
+        await client.query(
+          'select comment_id from task_comment_unread where user_id=$1',
+          [userA],
+        )
+      ).rows,
+    ).toEqual([{ comment_id: second }]);
+    await client.query('delete from tasks where id=$1', [task]);
+    expect(
+      (
+        await client.query(
+          'select * from task_comment_unread where user_id=$1',
+          [userA],
+        )
+      ).rows,
+    ).toEqual([]);
+  });
 
   it('freezes tied season awards and keeps earned frames after tasks are deleted', async () => {
     const taskA = crypto.randomUUID(),
