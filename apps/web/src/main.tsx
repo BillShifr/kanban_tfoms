@@ -4032,14 +4032,18 @@ function SidebarContent({
         </nav>
       )}
       <div className="sidebar-actions">
-        <CreateBoardPopover
-          departments={departments.filter(
-            (department) => department.canManage !== false,
-          )}
-          initialDepartmentId={selected?.departmentId}
-          afterCreate={boardCreated}
-        />
-        <CreateDepartmentPopover afterCreate={departmentCreated} />
+        {!loading && !error && (
+          <>
+            <CreateBoardPopover
+              departments={departments.filter(
+                (department) => department.canManage !== false,
+              )}
+              initialDepartmentId={selected?.departmentId}
+              afterCreate={boardCreated}
+            />
+            <CreateDepartmentPopover afterCreate={departmentCreated} />
+          </>
+        )}
       </div>
     </div>
   );
