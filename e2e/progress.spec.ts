@@ -95,6 +95,13 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await expect(drawer.locator('.leader-points small').first()).toHaveText(
       'баллов',
     );
+    expect(
+      await drawer
+        .locator('.leader-points b')
+        .first()
+        .evaluate((el) => getComputedStyle(el).color),
+    ).toBe('rgb(255, 255, 255)');
+    await expect(drawer.locator('[data-podium="1"]').first()).toBeVisible();
     await expect(drawer.locator('.achievement')).toHaveCount(8);
     await drawer.getByText('Доступные доски', { exact: true }).click();
     await expect(drawer.getByText('Пока нет результатов')).toBeVisible();
@@ -108,6 +115,9 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page.locator('.user-menu-trigger').click();
     await page.getByRole('menuitem', { name: 'Мой профиль' }).click();
     const profile = page.getByRole('dialog', { name: /профиль/i });
+    await expect(profile.getByLabel('Фамилия', { exact: true })).toBeVisible();
+    await expect(profile.getByRole('button', { name: /Искра/ })).toBeHidden();
+    await profile.getByRole('tab', { name: 'Достижения', exact: true }).click();
     const aura = profile.locator('.frame-nova.winner-aura');
     expect(
       await aura.evaluate(
@@ -129,9 +139,31 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       ).status(),
     ).toBe(403);
     await expect(profile.getByRole('button', { name: /Искра/ })).toBeDisabled();
+    await profile
+      .getByRole('tab', { name: 'Личные данные', exact: true })
+      .click();
     await profile.getByLabel('Фамилия', { exact: true }).fill('Тестов');
     await profile.getByLabel('Имя', { exact: true }).fill('Иван');
     await profile.getByLabel('О себе').fill('Помогаю команде');
+    await profile.getByRole('tab', { name: 'Достижения', exact: true }).click();
+    await profile
+      .getByRole('tab', { name: 'Личные данные', exact: true })
+      .click();
+    await expect(profile.getByLabel('Фамилия', { exact: true })).toHaveValue(
+      'Тестов',
+    );
+    const fieldLayout = await profile
+      .locator('.profile-name-fields')
+      .evaluate((el) => {
+        const fields = [...el.children].map((field) =>
+          field.getBoundingClientRect(),
+        );
+        return {
+          sameRow: Math.abs(fields[0].top - fields[1].top) < 1,
+          overflow: el.scrollWidth > el.clientWidth,
+        };
+      });
+    expect(fieldLayout).toEqual({ sameRow: !isMobile, overflow: false });
     await profile.getByRole('button', { name: 'Сохранить профиль' }).click();
     await expect(profile.getByRole('status')).toHaveText('Изменения сохранены');
     const saved = await (await page.request.get('/api/profile')).json();
@@ -250,6 +282,7 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page
       .getByRole('button', { name: 'Закрыть уведомление о баллах' })
       .click();
+    await profile.getByRole('tab', { name: 'Достижения', exact: true }).click();
     await profile.getByRole('button', { name: /Искра/ }).click();
     await expect(
       profile.getByRole('button', { name: /Искра/ }),

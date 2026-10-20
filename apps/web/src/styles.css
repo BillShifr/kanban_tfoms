@@ -826,12 +826,28 @@ a {
   justify-items: end;
   gap: 2px;
   padding: 8px;
-  background: var(--app-canvas);
-  border: 1px solid var(--app-border);
-  border-radius: 8px;
+  background: light-dark(#2458d3, #244ba5);
+  border: 1px solid light-dark(#2458d3, #527bd6);
+  border-radius: 12px;
+  box-shadow: 0 3px 9px #2458d31a;
+}
+.leader-points small {
+  color: #e2ebff;
+}
+.leader-list li[data-podium] .leader-position {
+  color: light-dark(#875309, #f2ce7f);
+  background: light-dark(#fff3d6, #3a3020);
+  border: 1px solid light-dark(#e8ca88, #806437);
+  border-radius: 12px;
+}
+.leader-list li[data-podium] .leader-position small {
+  color: inherit;
+}
+.leader-list li[data-podium='1'] {
+  box-shadow: inset 3px 0 light-dark(#c58b2c, #e3b65e);
 }
 .leader-points b {
-  color: var(--app-text);
+  color: #fff;
   font-size: 20px;
   font-weight: 700;
   text-align: right;
@@ -1199,6 +1215,173 @@ a {
 .profile-form {
   display: grid;
   gap: 16px;
+}
+.profile-modal .mantine-Modal-content {
+  border-radius: 20px;
+}
+.profile-modal .mantine-Modal-header {
+  padding: 24px 28px 12px;
+}
+.profile-modal .mantine-Modal-title {
+  font-size: 22px;
+  font-weight: 750;
+}
+.profile-modal .mantine-Modal-body {
+  padding: 0 28px 28px;
+}
+.profile-tabs {
+  margin-bottom: 24px;
+}
+.profile-tabs .mantine-Tabs-tab {
+  font-weight: 650;
+  padding: 14px 18px;
+}
+.profile-editor {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 28px;
+}
+.profile-identity {
+  border-right: 1px solid var(--app-border);
+  padding-right: 24px;
+}
+.profile-identity-heading {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.profile-identity-heading h2 {
+  font-size: 18px;
+  line-height: 1.35;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.profile-identity-heading > span:last-child {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+.profile-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 10px;
+  font-weight: 750;
+  color: var(--app-muted);
+}
+.profile-photo {
+  flex-direction: column;
+  gap: 12px;
+}
+.profile-photo .mantine-Avatar-root {
+  flex-shrink: 0;
+  background: light-dark(#e8efff, #22344f);
+  color: light-dark(#2c57a7, #abc8ff);
+  border: 1px solid light-dark(#d3dff7, #3e5982);
+}
+.profile-photo .profile-upload {
+  min-width: 0;
+  width: 100%;
+}
+.profile-photo .mantine-FileInput-label {
+  display: none;
+}
+.profile-photo .mantine-FileInput-input {
+  font-size: 13px;
+}
+.profile-photo .mantine-Text-root {
+  margin-top: 8px;
+  line-height: 1.5;
+}
+.profile-section-heading {
+  display: grid;
+  gap: 4px;
+}
+.profile-section-heading h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.profile-section-heading span {
+  font-size: 12px;
+  color: var(--app-muted);
+}
+.profile-name-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.profile-form .mantine-InputWrapper-label {
+  font-size: 13px;
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+.profile-form .mantine-Input-input {
+  border-radius: 9px;
+  font-size: 14px;
+}
+.profile-form .mantine-TextInput-input {
+  height: 42px;
+}
+.profile-form .mantine-InputWrapper-description {
+  font-size: 11px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.profile-modal .mantine-Input-input::placeholder,
+.profile-modal .mantine-FileInput-placeholder,
+.profile-modal .mantine-InputWrapper-description {
+  color: var(--app-muted);
+  opacity: 1;
+}
+.profile-save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--app-border);
+}
+.profile-save .mantine-Text-root {
+  font-size: 12px;
+}
+.profile-save .mantine-Button-root {
+  flex-shrink: 0;
+  border-radius: 9px;
+}
+@media (max-width: 600px) {
+  .profile-modal .mantine-Modal-header {
+    padding: 18px 18px 10px;
+  }
+  .profile-modal .mantine-Modal-body {
+    padding: 0 18px 20px;
+  }
+  .profile-editor {
+    grid-template-columns: 1fr;
+    gap: 22px;
+  }
+  .profile-identity {
+    border-right: 0;
+    border-bottom: 1px solid var(--app-border);
+    padding: 0 0 20px;
+  }
+  .profile-identity-heading {
+    margin-bottom: 16px;
+  }
+  .profile-photo {
+    flex-direction: row;
+    align-items: center;
+  }
+  .profile-photo .profile-upload {
+    width: auto;
+    flex: 1;
+  }
+  .profile-name-fields {
+    grid-template-columns: 1fr;
+  }
+  .profile-save {
+    flex-wrap: wrap;
+  }
+  .profile-save .mantine-Button-root {
+    margin-left: auto;
+  }
 }
 .profile-upload {
   flex: 1;

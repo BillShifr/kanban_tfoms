@@ -13,6 +13,7 @@ import {
   Text,
   Textarea,
   TextInput,
+  Tabs,
 } from '@mantine/core';
 import { ChevronRight, UserRound } from 'lucide-react';
 import { RewardAvatar } from './RewardAvatar';
@@ -275,57 +276,70 @@ function ProfileForm({
     }
   };
   return (
-    <Stack>
-      <Group>
-        <Avatar
-          size={76}
-          radius={24}
-          src={
-            profile.hasAvatar
-              ? `/api/profile/avatar/${profile.user.id}?v=${avatarVersion}`
-              : undefined
-          }
-        >
-          <UserRound size={32} />
-        </Avatar>
-        <div className="profile-upload">
-          <FileInput
-            label="Аватар"
-            placeholder="Загрузить фото"
-            accept="image/png,image/jpeg,image/webp"
-            disabled={busy}
-            onChange={(file) => {
-              if (file)
-                void run(async () => {
-                  const body = new FormData();
-                  body.append(
-                    'avatar',
-                    await prepareAvatar(file),
-                    'avatar.jpg',
-                  );
-                  await request('/profile/avatar', { method: 'POST', body });
-                });
-            }}
-          />
-          <Text size="xs" c="dimmed">
-            Квадратное фото; PNG, JPEG, WebP. До 10 МБ.
-          </Text>
+    <div className="profile-editor">
+      <div className="profile-identity">
+        <div className="profile-identity-heading">
+          <span className="profile-eyebrow">Личный кабинет</span>
+          <h2>{name(profile.user)}</h2>
+          <span>
+            {profile.user.role === 'superadmin'
+              ? 'Суперадминистратор'
+              : profile.user.role === 'admin'
+                ? 'Администратор'
+                : 'Пользователь'}
+          </span>
         </div>
-        {profile.hasAvatar && (
-          <Button
-            variant="subtle"
-            color="red"
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                await request('/profile/avatar', { method: 'DELETE' });
-              })
+        <Group className="profile-photo" align="flex-start">
+          <Avatar
+            size={88}
+            radius={28}
+            src={
+              profile.hasAvatar
+                ? `/api/profile/avatar/${profile.user.id}?v=${avatarVersion}`
+                : undefined
             }
           >
-            Удалить фото
-          </Button>
-        )}
-      </Group>
+            <UserRound size={32} />
+          </Avatar>
+          <div className="profile-upload">
+            <FileInput
+              label="Аватар"
+              placeholder="Загрузить фото"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={busy}
+              onChange={(file) => {
+                if (file)
+                  void run(async () => {
+                    const body = new FormData();
+                    body.append(
+                      'avatar',
+                      await prepareAvatar(file),
+                      'avatar.jpg',
+                    );
+                    await request('/profile/avatar', { method: 'POST', body });
+                  });
+              }}
+            />
+            <Text size="xs" c="dimmed">
+              PNG, JPEG или WebP · до 10 МБ
+            </Text>
+          </div>
+          {profile.hasAvatar && (
+            <Button
+              variant="subtle"
+              color="red"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await request('/profile/avatar', { method: 'DELETE' });
+                })
+              }
+            >
+              Удалить фото
+            </Button>
+          )}
+        </Group>
+      </div>
       <form
         className="profile-form"
         onSubmit={(e) => {
@@ -340,26 +354,32 @@ function ProfileForm({
           });
         }}
       >
-        <TextInput
-          label="Фамилия"
-          disabled={busy}
-          value={lastName}
-          maxLength={80}
-          onChange={(e) => {
-            setLastName(e.target.value);
-            onDirtyChange(true);
-          }}
-        />
-        <TextInput
-          label="Имя"
-          disabled={busy}
-          value={firstName}
-          maxLength={80}
-          onChange={(e) => {
-            setFirstName(e.target.value);
-            onDirtyChange(true);
-          }}
-        />
+        <div className="profile-section-heading">
+          <h3>Личные данные</h3>
+          <span>Так вас видят коллеги</span>
+        </div>
+        <div className="profile-name-fields">
+          <TextInput
+            label="Фамилия"
+            disabled={busy}
+            value={lastName}
+            maxLength={80}
+            onChange={(e) => {
+              setLastName(e.target.value);
+              onDirtyChange(true);
+            }}
+          />
+          <TextInput
+            label="Имя"
+            disabled={busy}
+            value={firstName}
+            maxLength={80}
+            onChange={(e) => {
+              setFirstName(e.target.value);
+              onDirtyChange(true);
+            }}
+          />
+        </div>
         <TextInput
           label="Email для входа"
           value={profile.user.email}
@@ -368,6 +388,8 @@ function ProfileForm({
         />
         <Textarea
           label="О себе"
+          minRows={3}
+          autosize
           disabled={busy}
           placeholder="Чем вы помогаете команде"
           value={bio}
@@ -377,17 +399,21 @@ function ProfileForm({
             onDirtyChange(true);
           }}
         />
-        <Button type="submit" loading={busy}>
-          Сохранить профиль
-        </Button>
+        <div className="profile-save">
+          <div aria-live="polite">
+            {error && (
+              <Text c="red" role="alert">
+                {error}
+              </Text>
+            )}
+            {message && <Text role="status">{message}</Text>}
+          </div>
+          <Button type="submit" loading={busy}>
+            Сохранить профиль
+          </Button>
+        </div>
       </form>
-      {error && (
-        <Text c="red" role="alert">
-          {error}
-        </Text>
-      )}
-      {message && <Text role="status">{message}</Text>}
-    </Stack>
+    </div>
   );
 }
 
@@ -508,6 +534,9 @@ export function TeamProgress({
             <li
               key={person.id}
               className={person.id === user.id ? 'is-me' : ''}
+              data-podium={
+                person.rank && person.rank <= 3 ? person.rank : undefined
+              }
             >
               <span className="leader-position">
                 <b>{person.rank ?? '—'}</b>
@@ -756,8 +785,9 @@ export function TeamProgress({
           closeProfile();
         }}
         title="Мой профиль"
+        className="profile-modal"
         centered
-        size={680}
+        size={820}
       >
         {profile.isError ? (
           <Stack>
@@ -765,41 +795,49 @@ export function TeamProgress({
             <Button onClick={() => void profile.refetch()}>Повторить</Button>
           </Stack>
         ) : profile.data ? (
-          <Stack gap="xl">
-            <ProfileForm
-              profile={profile.data}
-              request={request}
-              updateUser={updateUser}
-              refresh={refresh}
-              onDirtyChange={setProfileDirty}
-              onBusyChange={setProfileBusy}
-            />
-            {progress.data && (
-              <section>
-                <Group justify="space-between">
-                  <h2>Мои достижения</h2>
-                  <Badge>{progress.data.me.points} баллов за месяц</Badge>
-                </Group>
-                <Text size="xs" c="dimmed" mb="sm">
-                  {progress.data.scope}
-                </Text>
-                <Achievements
-                  person={progress.data.me}
-                  rewards={progress.data.rewards}
-                />
-                <RewardWardrobe
-                  rewards={progress.data.rewards}
-                  name={name(user)}
-                  avatar={
-                    profile.data.hasAvatar
-                      ? `/api/profile/avatar/${user.id}`
-                      : undefined
-                  }
-                  onSelect={selectFrame}
-                />
-              </section>
-            )}
-          </Stack>
+          <Tabs defaultValue="personal" keepMounted>
+            <Tabs.List className="profile-tabs">
+              <Tabs.Tab value="personal">Личные данные</Tabs.Tab>
+              <Tabs.Tab value="achievements">Достижения</Tabs.Tab>
+            </Tabs.List>
+            <Tabs.Panel value="personal">
+              <ProfileForm
+                profile={profile.data}
+                request={request}
+                updateUser={updateUser}
+                refresh={refresh}
+                onDirtyChange={setProfileDirty}
+                onBusyChange={setProfileBusy}
+              />
+            </Tabs.Panel>
+            <Tabs.Panel value="achievements" pt="lg">
+              {progress.data && (
+                <section>
+                  <Group justify="space-between">
+                    <h2>Мои достижения</h2>
+                    <Badge>{progress.data.me.points} баллов за месяц</Badge>
+                  </Group>
+                  <Text size="xs" c="dimmed" mb="sm">
+                    {progress.data.scope}
+                  </Text>
+                  <Achievements
+                    person={progress.data.me}
+                    rewards={progress.data.rewards}
+                  />
+                  <RewardWardrobe
+                    rewards={progress.data.rewards}
+                    name={name(user)}
+                    avatar={
+                      profile.data.hasAvatar
+                        ? `/api/profile/avatar/${user.id}`
+                        : undefined
+                    }
+                    onSelect={selectFrame}
+                  />
+                </section>
+              )}
+            </Tabs.Panel>
+          </Tabs>
         ) : (
           <Text>Загружаем профиль…</Text>
         )}
