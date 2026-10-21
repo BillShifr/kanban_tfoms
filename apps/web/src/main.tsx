@@ -552,6 +552,7 @@ function UserMenu({
           variant="subtle"
           color="gray"
           className="user-menu-trigger"
+          aria-label={personLabel(user)}
           leftSection={
             <RewardAvatar
               name={personLabel(user)}
@@ -4122,6 +4123,7 @@ function Workspace({
     [archiveOpen, setArchiveOpen] = useState(false),
     [usersOpen, setUsersOpen] = useState(false),
     [profileOpen, setProfileOpen] = useState(false),
+    [rewardsHeader, setRewardsHeader] = useState<HTMLDivElement | null>(null),
     [mobileSidebarOpen, setMobileSidebarOpen] = useState(false),
     [sidebarCollapsed, setSidebarCollapsed] = useState(
       () => window.localStorage.getItem('kanban.sidebar-collapsed') === 'true',
@@ -4494,6 +4496,7 @@ function Workspace({
         <span data-testid="user-email" className="visually-hidden">
           {user.email}
         </span>
+        <div className="header-rewards-slot" ref={setRewardsHeader} />
         <UserMenu
           user={user}
           logout={logout}
@@ -4503,6 +4506,7 @@ function Workspace({
         />
       </header>
       <TeamProgress
+        headerTarget={rewardsHeader}
         user={user}
         updateUser={updateCurrentUser}
         request={api}

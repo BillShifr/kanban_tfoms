@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Avatar,
@@ -425,12 +426,14 @@ function ProfileForm({
 }
 
 export function TeamProgress({
+  headerTarget,
   user,
   updateUser,
   request,
   profileOpen,
   closeProfile,
 }: {
+  headerTarget: HTMLElement | null;
   user: Member;
   updateUser: (user: Member) => void;
   request: Request;
@@ -580,6 +583,61 @@ export function TeamProgress({
     );
   return (
     <>
+      {headerTarget &&
+        createPortal(
+          <div className="header-rewards" aria-label="Ваши награды">
+            <button
+              type="button"
+              className="header-achievements"
+              aria-label={`Мои достижения${data ? `: ${data.rewards.earned.length}` : ''}`}
+              onClick={() => setOpened(true)}
+              title="Мои достижения"
+            >
+              <span className="header-earned-icons" aria-hidden="true">
+                {data?.rewards.earned.length ? (
+                  [...data.rewards.earned]
+                    .sort((a, b) => b.earnedAt.localeCompare(a.earnedAt))
+                    .filter((earned) =>
+                      milestones.some((m) => m.art === earned.code),
+                    )
+                    .slice(0, 3)
+                    .map((earned) => (
+                      <img
+                        key={earned.code}
+                        src={`/achievements/${earned.code}.png`}
+                        alt=""
+                        width={32}
+                        height={32}
+                      />
+                    ))
+                ) : (
+                  <span className="header-reward-empty">Достижения</span>
+                )}
+              </span>
+              {data && (
+                <span className="header-reward-count">
+                  {data.rewards.earned.length}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              className="header-frame-button"
+              aria-label="Выбрать рамку аватара"
+              title="Рамки аватара"
+              onClick={() => setWardrobeOpen(true)}
+            >
+              <span
+                className={`reward-avatar frame-${data?.rewards.selectedFrame ?? 'none'} header-frame-sample`}
+                aria-hidden="true"
+              >
+                <span />
+              </span>
+              <span className="header-frame-label">Рамки</span>
+            </button>
+          </div>,
+          headerTarget,
+        )}
       <PointCelebration events={data?.recentEvents} userId={user.id} />
       <aside className="team-rail" aria-label="Команда и достижения">
         <div className="team-rail-heading">
@@ -692,6 +750,7 @@ export function TeamProgress({
       </button>
       <Modal
         opened={opened}
+        closeOnEscape={!wardrobeOpen}
         onClose={() => setOpened(false)}
         size={760}
         centered
@@ -791,6 +850,7 @@ export function TeamProgress({
             onSelect={selectFrame}
           />
         )}
+        {loadState}
       </Modal>
       <Modal
         opened={profileOpen}

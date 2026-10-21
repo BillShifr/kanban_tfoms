@@ -193,8 +193,65 @@ a {
   object-fit: contain;
 }
 .user-menu-trigger {
-  margin-left: auto;
+  margin-left: 0;
   color: var(--app-soft);
+}
+.header-rewards-slot {
+  margin-left: auto;
+  min-width: 0;
+}
+.header-rewards {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.header-achievements,
+.header-frame-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 4px 8px;
+  min-height: 40px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--app-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.header-achievements:hover,
+.header-frame-button:hover {
+  background: var(--app-canvas);
+}
+.header-earned-icons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.header-earned-icons img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+.header-reward-count {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.header-reward-empty {
+  color: var(--app-muted);
+}
+.header-frame-sample {
+  width: 23px;
+  height: 23px;
+  margin: 4px;
+}
+.header-frame-sample > span {
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  background: var(--app-canvas);
+  border: 1px solid var(--app-border);
 }
 .mobile-sidebar-trigger {
   display: none;
@@ -595,18 +652,18 @@ a {
 .team-rail,
 .team-dialog,
 .team-mobile-bar {
-  --app-text: #f3f6ff;
-  --app-muted: #a9b6ca;
-  --app-soft: #c6d1e2;
-  --app-border: #344158;
-  --app-canvas: #18263a;
-  --app-surface: #111d2f;
-  --app-accent: #9be9cf;
-  --app-accent-soft: #213e42;
+  --app-text: light-dark(#272334, #f4f0fa);
+  --app-muted: light-dark(#6b6378, #b7aec8);
+  --app-soft: light-dark(#51495f, #d1c8df);
+  --app-border: light-dark(#ded8e8, #443b51);
+  --app-canvas: light-dark(#f4f1f8, #27222f);
+  --app-surface: light-dark(#fdfcfe, #1d1924);
+  --app-accent: light-dark(#7141b2, #d0afff);
+  --app-accent-soft: light-dark(#ede4fa, #382a49);
+  --game-highlight: light-dark(#7141b2, #dfc5ff);
   color: var(--app-text);
   font-family: 'Manrope', sans-serif;
   background: var(--app-surface);
-  color-scheme: dark;
 }
 .team-rail {
   grid-column: 3;
@@ -635,8 +692,8 @@ a {
   text-transform: uppercase;
 }
 .team-dialog-header {
-  background: #111d2f;
-  color: #f3f6ff;
+  background: var(--app-surface);
+  color: var(--app-text);
   padding: 24px;
 }
 .team-dialog-title {
@@ -645,31 +702,31 @@ a {
   font-size: 22px;
 }
 .team-dialog-close {
-  color: #c6d1e2;
+  color: var(--app-soft);
 }
 .team-dialog .mantine-Modal-body {
   padding: 0 24px 24px;
 }
 .team-rail .mantine-SegmentedControl-root,
 .team-dialog .mantine-SegmentedControl-root {
-  background: #0b1524;
-  border: 1px solid #344158;
+  background: var(--app-canvas);
+  border: 1px solid var(--app-border);
   border-radius: 10px;
 }
 .team-rail .mantine-SegmentedControl-indicator,
 .team-dialog .mantine-SegmentedControl-indicator {
-  background: #30445b;
-  box-shadow: none;
+  background: var(--app-surface);
+  box-shadow: 0 1px 4px #21142f12;
 }
 .team-rail .mantine-SegmentedControl-label,
 .team-dialog .mantine-SegmentedControl-label {
-  color: #c6d1e2;
+  color: var(--app-soft);
   font-family: inherit;
   font-weight: 700;
 }
 .team-rail .mantine-SegmentedControl-label[data-active],
 .team-dialog .mantine-SegmentedControl-label[data-active] {
-  color: #fff;
+  color: var(--app-accent);
 }
 .team-rail-heading p,
 .team-empty {
@@ -685,8 +742,13 @@ a {
   margin: 20px 0;
   padding: 20px;
   background:
-    radial-gradient(ellipse at 100% 0%, #2e5b5766, transparent 70%), #1a2d3d;
-  border: 1px solid #446662;
+    radial-gradient(
+      ellipse at 100% 0%,
+      light-dark(#e5d7f788, #69428b44),
+      transparent 70%
+    ),
+    var(--app-canvas);
+  border: 1px solid var(--app-border);
   border-radius: 18px;
   position: relative;
   overflow: hidden;
@@ -708,7 +770,7 @@ a {
   font-weight: 800;
   letter-spacing: -2px;
   font-variant-numeric: tabular-nums;
-  color: #bcf5df;
+  color: var(--game-highlight);
 }
 .team-score-number > span {
   font-size: 13px;
@@ -735,7 +797,7 @@ a {
 .team-score p {
   margin-bottom: 0;
   font-weight: 600;
-  color: #bcf5df;
+  color: var(--game-highlight);
 }
 .next-achievement {
   display: flex;
@@ -743,9 +805,9 @@ a {
   align-items: center;
   padding: 14px 12px;
   gap: 10px;
-  border: 1px solid #344158;
+  border: 1px solid var(--app-border);
   border-radius: 14px;
-  background: #1a293e;
+  background: var(--app-canvas);
   color: var(--app-text);
   text-align: left;
   cursor: pointer;
@@ -784,32 +846,32 @@ a {
   height: 5px;
   border: 0;
   border-radius: 4px;
-  background: #35445a;
+  background: var(--app-border);
   min-width: 0;
   width: 100%;
   flex: 1;
 }
 .next-achievement-progress progress::-webkit-progress-bar {
-  background: #35445a;
+  background: var(--app-border);
   border-radius: 4px;
 }
 .next-achievement-progress progress::-webkit-progress-value {
-  background: #9be9cf;
+  background: var(--app-accent);
   border-radius: 4px;
 }
 .next-achievement-progress progress::-moz-progress-bar {
-  background: #9be9cf;
+  background: var(--app-accent);
   border-radius: 4px;
 }
 .next-achievement-progress small {
   white-space: nowrap;
 }
 .next-achievement:hover {
-  border-color: #9be9cf;
+  border-color: var(--app-accent);
 }
 .team-rail :focus-visible,
 .team-dialog :focus-visible {
-  outline: 2px solid #bcf5df;
+  outline: 2px solid var(--app-accent);
   outline-offset: 3px;
 }
 .team-section-title {
@@ -846,9 +908,9 @@ a {
   width: 100%;
 }
 .team-rail .team-open {
-  background: #b9f2de;
-  color: #122a29;
-  border: 1px solid #b9f2de;
+  background: var(--app-accent);
+  color: light-dark(#ffffff, #251b32);
+  border: 1px solid var(--app-accent);
   border-radius: 10px;
   font-family: inherit;
   font-size: 12px;
@@ -856,10 +918,10 @@ a {
   height: 40px;
 }
 .team-rail .team-open:hover {
-  background: #d5ffef;
+  filter: brightness(1.08);
 }
 .team-rail .reward-open {
-  color: #b9f2de;
+  color: var(--app-accent);
   font-family: inherit;
   font-size: 12px;
 }
@@ -878,14 +940,14 @@ a {
   gap: 12px;
   padding: 20px;
   border-radius: 12px;
-  background: #1a2d3d;
-  border: 1px solid #446662;
+  background: var(--app-canvas);
+  border: 1px solid var(--app-border);
   margin: 20px 0 24px;
   font-variant-numeric: tabular-nums;
 }
 .team-personal-strip strong {
   font-size: 19px;
-  color: #bcf5df;
+  color: var(--game-highlight);
 }
 .team-personal-strip span {
   font-size: 12px;
@@ -962,7 +1024,7 @@ a {
 }
 .leader-name em {
   font-style: normal;
-  color: #b9f2de;
+  color: var(--app-accent);
   font-weight: 800;
 }
 .leader-list strong {
@@ -985,7 +1047,7 @@ a {
 }
 .leader-list li[data-podium] .leader-position b,
 .leader-list li[data-podium] .leader-points b {
-  color: #f3d99c;
+  color: light-dark(#835810, #f3d99c);
   text-shadow: 0 0 16px #e8bd5426;
 }
 .leader-points b {
@@ -1042,6 +1104,7 @@ a {
 .reward-avatar {
   --frame-a: #5377ec;
   --frame-b: #70d9eb;
+  --frame-c: #d8f4ff;
   display: inline-flex;
   position: relative;
   flex: 0 0 auto;
@@ -1051,35 +1114,76 @@ a {
 .reward-avatar:not(.frame-none)::before {
   content: '';
   position: absolute;
-  inset: -3px;
-  border: 2px solid var(--frame-a);
-  border-top-color: var(--frame-b);
-  border-bottom-color: var(--frame-b);
+  inset: -4px;
+  padding: 3px;
+  background: conic-gradient(
+    from 30deg,
+    var(--frame-a),
+    var(--frame-c) 16%,
+    var(--frame-b) 34%,
+    var(--frame-a) 55%,
+    var(--frame-c) 70%,
+    var(--frame-b) 86%,
+    var(--frame-a)
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
   border-radius: inherit;
-  box-shadow: 0 0 0 1px var(--app-surface);
+  animation: frame-iridescence 8s linear 2;
   pointer-events: none;
+}
+.reward-avatar:not(.frame-none)::after {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: inherit;
+  z-index: -1;
+  pointer-events: none;
+  background: conic-gradient(
+    var(--frame-a),
+    var(--frame-b),
+    var(--frame-c),
+    var(--frame-a)
+  );
+  filter: blur(6px);
+  opacity: 0.28;
+}
+@keyframes frame-iridescence {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.reward-avatar:not(.frame-none) > .mantine-Avatar-root {
+  box-shadow:
+    0 0 0 1px var(--app-surface),
+    inset 0 0 0 1px #ffffff44;
 }
 .frame-bridge,
 .frame-prism {
   --frame-a: #8753d6;
   --frame-b: #e08ad2;
+  --frame-c: #f8ddff;
 }
 .frame-summit,
 .frame-tide {
   --frame-a: #168b81;
   --frame-b: #60c9a2;
+  --frame-c: #defff0;
 }
 .frame-nova {
-  --frame-a: #4169ed;
-  --frame-b: #b48af5;
+  --frame-a: #c58c2d;
+  --frame-b: #f2cf75;
+  --frame-c: #fff2c5;
 }
 .frame-nova::before,
 .frame-prism::before,
 .frame-tide::before {
-  outline: 1px solid var(--frame-a);
-  outline-offset: 3px;
+  inset: -6px;
+  padding: 4px;
 }
-.winner-aura::after {
+.reward-avatar.winner-aura::after {
   content: '';
   position: absolute;
   inset: -9px;
@@ -1312,7 +1416,8 @@ a {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .winner-aura::after,
+  .reward-avatar:not(.frame-none)::before,
+  .reward-avatar.winner-aura::after,
   .points-celebration {
     animation: none;
   }
@@ -1361,18 +1466,18 @@ a {
   background: var(--app-surface);
 }
 .team-dialog .achievement.earned {
-  background: #213e42;
-  border-color: #6baf9b;
+  background: var(--app-accent-soft);
+  border-color: color-mix(in srgb, var(--app-accent) 45%, var(--app-border));
 }
 .team-dialog .mantine-Progress-root {
-  background: #344158;
+  background: var(--app-border);
 }
 .team-dialog .mantine-Progress-section {
-  background: #9be9cf;
+  background: var(--app-accent);
 }
 .team-dialog .team-collection .mantine-Button-root {
-  color: #bcf5df;
-  background: #213e42;
+  color: var(--app-accent);
+  background: var(--app-accent-soft);
 }
 .achievement strong {
   font-size: 13px;
@@ -2614,6 +2719,35 @@ a {
   }
   .user-menu-trigger {
     max-width: 220px;
+    width: 48px;
+    flex: 0 0 48px;
+    padding-inline: 8px;
+  }
+  .user-menu-trigger .mantine-Button-label,
+  .user-menu-trigger .mantine-Button-section[data-position='right'],
+  .header-frame-label {
+    display: none;
+  }
+  .user-menu-trigger .mantine-Button-section[data-position='left'] {
+    margin: 0;
+  }
+  .header-rewards {
+    gap: 4px;
+  }
+  .header-achievements,
+  .header-frame-button {
+    padding-inline: 4px;
+  }
+  .header-earned-icons img {
+    width: 27px;
+    height: 27px;
+  }
+  .header-reward-empty {
+    font-size: 11px;
+  }
+  .header-frame-button {
+    min-width: 40px;
+    justify-content: center;
   }
   .workspace-sidebar {
     display: none;

@@ -48,6 +48,10 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page.getByLabel('Пароль').fill(password);
     await page.getByRole('button', { name: 'Войти', exact: true }).click();
     await expect(page.locator('.user-menu-trigger')).toBeVisible();
+    await expect(page.locator('.header-achievements')).toHaveAccessibleName(
+      'Мои достижения: 0',
+    );
+    await expect(page.locator('.header-earned-icons img')).toHaveCount(0);
 
     const visible = await (
       await page.request.get('/api/progress?scope=visible')
@@ -385,6 +389,51 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page.reload();
     await expect(page.locator('.user-menu-trigger .frame-trail')).toBeVisible();
     await expect(page.locator('.points-celebration')).toHaveCount(0);
+    await expect(page.locator('.header-earned-icons img')).toHaveCount(2);
+    await expect(
+      page.locator('.header-frame-button .frame-trail'),
+    ).toBeVisible();
+    const frameStyle = await page
+      .locator('.user-menu-trigger .frame-trail')
+      .evaluate((el) => ({
+        ring: getComputedStyle(el, '::before').backgroundImage,
+        animation: getComputedStyle(el, '::before').animationName,
+      }));
+    expect(frameStyle.ring).toContain('conic-gradient');
+    expect(frameStyle.animation).toBe('frame-iridescence');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(
+      await page
+        .locator('.user-menu-trigger .frame-trail')
+        .evaluate((el) => getComputedStyle(el, '::before').animationName),
+    ).toBe('none');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    expect(
+      await page
+        .locator('main > header')
+        .evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    await page.locator('.header-frame-button').click();
+    const wardrobe = page.getByRole('dialog', {
+      name: 'Рамки и награды',
+      exact: true,
+    });
+    await expect(
+      wardrobe.getByRole('button', { name: /Искра/ }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(wardrobe).toBeHidden();
+    await page.locator('.header-achievements').click();
+    await expect(drawer).toBeVisible();
+    await drawer
+      .getByRole('button', { name: 'Рамки и награды', exact: true })
+      .click();
+    await expect(wardrobe).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(wardrobe).toBeHidden();
+    await expect(drawer).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
     const title = `My contribution ${suffix}`;
     await page
       .getByRole('button', { name: `Свернуть задачу «${title}»`, exact: true })
