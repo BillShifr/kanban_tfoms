@@ -191,22 +191,16 @@ async function chooseAssignee(page: Page, option: string) {
   await page.getByRole('option', { name: option, exact: true }).click();
 }
 
-async function chooseTextAssignee(page: Page, name: string) {
-  const input = page.getByRole('textbox', {
-    name: 'Исполнитель',
-    exact: true,
-  });
-  await input.fill(name);
-  await page
-    .getByRole('option', { name: `Использовать «${name}»`, exact: true })
-    .click();
-}
-
 async function addTask(page: Page, title: string) {
   const backlog = backlogColumn(page);
   await backlog.getByRole('button', { name: 'Добавить задачу' }).click();
   await backlog.getByPlaceholder('Новая задача').fill(title);
-  await backlog.getByRole('button', { name: 'Добавить', exact: true }).click();
+  const submit = backlog.getByRole('button', { name: 'Добавить', exact: true });
+  await expect(submit).toBeDisabled();
+  await backlog.getByLabel('Исполнитель').click();
+  await page.getByRole('option').first().click();
+  await expect(submit).toBeEnabled();
+  await submit.click();
   await expect(backlog.getByText(title, { exact: true })).toBeVisible();
 }
 
@@ -457,9 +451,11 @@ test.describe('core board workflow', () => {
       name: 'Закрыть меню досок',
     });
     await expect(closeButton).toBeVisible();
+    await expect(closeButton).toHaveCSS('width', '44px');
+    await expect(closeButton).toHaveCSS('height', '44px');
     const closeButtonBox = await closeButton.boundingBox();
-    expect(closeButtonBox?.width).toBeGreaterThanOrEqual(44);
-    expect(closeButtonBox?.height).toBeGreaterThanOrEqual(44);
+    expect(closeButtonBox?.width).toBeCloseTo(44, 3);
+    expect(closeButtonBox?.height).toBeCloseTo(44, 3);
     await closeButton.click();
     await expect(drawer).toBeHidden();
 
@@ -836,7 +832,10 @@ test.describe('core board workflow', () => {
     await expect(page.getByLabel('Автор задачи')).toContainText('Петров Иван');
 
     await page.getByRole('button', { name: 'Редактировать' }).click();
-    await page.getByLabel('Исполнитель').click();
+    await page
+      .getByRole('tabpanel', { name: 'Задача' })
+      .getByRole('textbox', { name: 'Исполнитель', exact: true })
+      .click();
     await expect(
       page.getByRole('option', {
         name: `Петров Иван · ${memberEmail}`,
@@ -1441,9 +1440,9 @@ test.describe('core board workflow', () => {
     await expect(drawer.getByRole('textbox', { name: 'Описание' })).toHaveCount(
       0,
     );
-    await expect(drawer.getByLabel('Содержание задачи')).toContainText(
-      'Не назначен',
-    );
+    const overview = drawer.getByLabel('Содержание задачи');
+    await expect(overview).toContainText('Исполнитель');
+    await expect(overview).not.toContainText('Не назначен');
     await expect(drawer.getByLabel('Содержание задачи')).toContainText(
       'Без срока',
     );
@@ -1524,6 +1523,11 @@ test.describe('core board workflow', () => {
       'Role enforcement is API-level and does not depend on viewport',
     );
     await signIn(page);
+    const superadmin = (
+      (await (await page.request.get('/api/auth/me')).json()) as {
+        user: { id: string };
+      }
+    ).user;
     const userEmail = uniqueEmail('delete-user');
     const adminEmail = uniqueEmail('delete-admin');
     const userPassword = 'delete-user-pass-123';
@@ -1534,7 +1538,12 @@ test.describe('core board workflow', () => {
       userPassword,
       'user',
     );
-    await createAccount(page, adminEmail, adminPassword, 'admin');
+    const adminUser = await createAccount(
+      page,
+      adminEmail,
+      adminPassword,
+      'admin',
+    );
     const department = await createDepartmentForTest(
       page,
       uniqueName('Отдел удаления'),
@@ -1559,6 +1568,7 @@ test.describe('core board workflow', () => {
         data: {
           columnId: boardData.columns[0]!.id,
           title: uniqueName('Задача суперадминистратора'),
+          assigneeId: superadmin.id,
         },
       },
     );
@@ -1583,6 +1593,7 @@ test.describe('core board workflow', () => {
         data: {
           columnId: boardData.columns[0]!.id,
           title: uniqueName('Собственная задача пользователя'),
+          assigneeId: ordinaryUser.id,
         },
       },
     );
@@ -1610,6 +1621,7 @@ test.describe('core board workflow', () => {
         data: {
           columnId: boardData.columns[0]!.id,
           title: uniqueName('Собственная задача администратора'),
+          assigneeId: adminUser.id,
         },
       },
     );
@@ -1629,6 +1641,7 @@ test.describe('core board workflow', () => {
         data: {
           columnId: boardData.columns[0]!.id,
           title: uniqueName('Задача администратора для удаления суперadmin'),
+          assigneeId: adminUser.id,
         },
       },
     );
@@ -1667,9 +1680,6 @@ test.describe('core board workflow', () => {
     await taskCard(page, title).getByRole('button').first().click();
 
     await page.getByRole('button', { name: 'Редактировать' }).click();
-    await chooseOption(page, 'Исполнитель', email);
-    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
-    await page.getByRole('button', { name: 'Редактировать' }).click();
     await chooseOption(page, 'Колонка', 'В работе');
     await expect(columnByName(page, 'В работе').getByText(title)).toBeVisible();
 
@@ -1685,13 +1695,10 @@ test.describe('core board workflow', () => {
     await page.getByRole('tab', { name: 'История' }).click();
 
     const events = page.getByTestId('task-history-event');
-    await expect(events).toHaveCount(3);
+    await expect(events).toHaveCount(2);
     await expect(page.locator('[data-event-type="created"]')).toContainText(
       `${email} создал задачу`,
     );
-    await expect(
-      page.locator('[data-event-type="assignee_changed"]'),
-    ).toContainText(`Не назначен → ${email}`);
     await expect(
       page.locator('[data-event-type="column_changed"]'),
     ).toContainText('Бэклог → В работе');
@@ -1702,88 +1709,67 @@ test.describe('core board workflow', () => {
     }
   });
 
-  test('saves, filters, records, replaces, and clears a free-text assignee', async ({
+  test('keeps a registered assignee on every newly created task', async ({
     page,
   }) => {
     await signIn(page);
     const boardName = await createBoardForTest(page);
-    const title = uniqueName('Задача со свободным исполнителем');
+    const title = uniqueName('Задача с обязательным исполнителем');
     const externalAssignee = uniqueName('Внешний исполнитель');
     await addTask(page, title);
     await taskCard(page, title).getByRole('button').first().click();
 
     await page.getByRole('button', { name: 'Редактировать' }).click();
-    await chooseTextAssignee(page, externalAssignee);
-    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
-    await page
-      .getByRole('button', { name: 'Закрыть задачу', exact: true })
-      .click();
-    await expect(page.locator('.task-modal')).toBeHidden();
-
-    const card = taskCard(page, title);
+    const assignee = page
+      .getByRole('tabpanel', { name: 'Задача' })
+      .getByRole('textbox', {
+        name: 'Исполнитель',
+        exact: true,
+      });
+    await assignee.click();
     await expect(
-      card.getByTitle(`Исполнитель: ${externalAssignee} · без учётной записи`, {
+      page.getByRole('option', { name: 'Не назначен', exact: true }),
+    ).toHaveCount(0);
+    await assignee.fill(externalAssignee);
+    await expect(
+      page.getByRole('option', {
+        name: `Использовать «${externalAssignee}»`,
         exact: true,
       }),
-    ).toBeVisible();
+    ).toHaveCount(0);
 
-    await page.getByRole('button', { name: /^Фильтры/ }).click();
-    await chooseOption(page, 'Исполнитель', externalAssignee);
-    await expect(card).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'Фильтры · 1', exact: true }),
-    ).toBeVisible();
-    const filterTrigger = page.getByRole('button', {
-      name: 'Фильтры · 1',
-      exact: true,
-    });
-    const filterTitle = page.getByText('Фильтры задач', { exact: true });
-    if (await filterTitle.isVisible()) {
-      await page.getByRole('heading', { name: boardName, exact: true }).click();
-      await expect(filterTitle).toBeHidden();
-    }
-    await filterTrigger.click();
-    await expect(filterTitle).toBeVisible();
-    await page
-      .getByText('Фильтры задач', { exact: true })
-      .locator('..')
-      .getByRole('button', { name: 'Сбросить', exact: true })
-      .click();
-    await expect(
-      page.getByRole('button', { name: 'Фильтры', exact: true }),
-    ).toBeVisible();
-    await page.getByRole('heading', { name: boardName, exact: true }).click();
-    await expect(filterTitle).toBeHidden();
-
-    await card.getByRole('button').first().click();
-    await page.getByRole('tab', { name: 'История' }).click();
-    await expect(
-      page
-        .locator('[data-event-type="assignee_changed"]')
-        .filter({ hasText: `Не назначен → ${externalAssignee}` }),
-    ).toBeVisible();
-
-    await page.getByRole('tab', { name: 'Задача', exact: true }).click();
-    await page.getByRole('button', { name: 'Редактировать' }).click();
-    await chooseAssignee(page, email);
-    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
-    await page.getByRole('tab', { name: 'История' }).click();
-    await expect(
-      page
-        .locator('[data-event-type="assignee_changed"]')
-        .filter({ hasText: `${externalAssignee} → ${email}` }),
-    ).toBeVisible();
-
-    await page.getByRole('tab', { name: 'Задача', exact: true }).click();
-    await page.getByRole('button', { name: 'Редактировать' }).click();
-    await chooseAssignee(page, 'Не назначен');
-    await page.getByRole('button', { name: 'Сохранить изменения' }).click();
-    await page.getByRole('tab', { name: 'История' }).click();
-    await expect(
-      page
-        .locator('[data-event-type="assignee_changed"]')
-        .filter({ hasText: `${email} → Не назначен` }),
-    ).toBeVisible();
+    const boards = (await (await page.request.get('/api/boards')).json()) as {
+      boards: Array<{ id: string; name: string }>;
+    };
+    const boardId = boards.boards.find((item) => item.name === boardName)?.id;
+    expect(boardId).toBeTruthy();
+    const board = await (
+      await page.request.get(`/api/boards/${boardId}`)
+    ).json();
+    const rejectedCreate = await page.request.post(
+      `/api/boards/${boardId}/tasks`,
+      {
+        data: {
+          columnId: board.columns[0].id,
+          title: uniqueName('Задача без исполнителя'),
+        },
+      },
+    );
+    expect(rejectedCreate.status()).toBe(400);
+    expect(await rejectedCreate.json()).toEqual({ code: 'VALIDATION_ERROR' });
+    const task = board.columns
+      .flatMap(
+        (column: { tasks: Array<{ id: string; title: string }> }) =>
+          column.tasks,
+      )
+      .find((item: { title: string }) => item.title === title);
+    expect(task).toBeTruthy();
+    const response = await page.request.patch(
+      `/api/boards/${boardId}/tasks/${task!.id}`,
+      { data: { assigneeId: null } },
+    );
+    expect(response.status()).toBe(400);
+    expect(await response.json()).toEqual({ code: 'ASSIGNEE_REQUIRED' });
   });
 
   test('moves a task with the explicit move menu and archives it', async ({

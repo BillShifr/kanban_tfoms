@@ -93,7 +93,7 @@ database('PostgreSQL invariants', () => {
       );
       await client.query("set local statement_timeout='2s'");
       await client.query(
-        "insert into tasks(id,board_id,column_id,title,author_id,position) values($1,$2,$3,'Concurrent reward',$4,1)",
+        "insert into tasks(id,board_id,column_id,title,author_id,assignee_id,position) values($1,$2,$3,'Concurrent reward',$4,$4,1)",
         [crypto.randomUUID(), boardA, columnA, userA],
       );
       expect(
@@ -120,7 +120,32 @@ database('PostgreSQL invariants', () => {
     }
   });
 
-  it.each(['0014_', '0015_', '0016_', '0018_'])(
+  it('requires a registered assignee for new tasks and keeps the assignment', async () => {
+    const unassigned = crypto.randomUUID();
+    await client.query('savepoint missing_assignee');
+    await expect(
+      client.query(
+        `insert into tasks(id,board_id,column_id,title,author_id,position)
+         values($1,$2,$3,'Unassigned',$4,1)`,
+        [unassigned, boardA, columnA, userA],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+    await client.query('rollback to savepoint missing_assignee');
+
+    const assigned = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,position)
+       values($1,$2,$3,'Assigned',$4,$4,1)`,
+      [assigned, boardA, columnA, userA],
+    );
+    await client.query('savepoint cleared_assignee');
+    await expect(
+      client.query('update tasks set assignee_id=null where id=$1', [assigned]),
+    ).rejects.toMatchObject({ code: '23514' });
+    await client.query('rollback to savepoint cleared_assignee');
+  });
+
+  it.each(['0014_', '0015_', '0016_', '0018_', '0020_'])(
     'upgrades a populated schema before %s without losing tasks',
     async (cutoff) => {
       const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -218,6 +243,19 @@ database('PostgreSQL invariants', () => {
           ['Legacy task'],
         );
         expect(upgraded.rows).toEqual([{ title: 'Legacy task' }]);
+        expect(
+          (
+            await legacyPool.query(
+              'select assignee_required from tasks where title=$1',
+              ['Legacy task'],
+            )
+          ).rows,
+        ).toEqual([{ assignee_required: false }]);
+        await expect(
+          legacyPool.query(
+            "update tasks set description='still editable' where title='Legacy task'",
+          ),
+        ).resolves.toMatchObject({ rowCount: 1 });
         const contributions = await legacyPool.query<{
           kind: string;
           points: number;
@@ -392,7 +430,7 @@ database('PostgreSQL invariants', () => {
       taskB = crypto.randomUUID();
     await client.query(
       `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,completed_at,position)
-       values($1,$2,$3,'Completed',$4,$4,now(),1),($5,$6,$7,'Created only',$8,null,null,1)`,
+       values($1,$2,$3,'Completed',$4,$4,now(),1),($5,$6,$7,'Created only',$8,$8,null,1)`,
       [taskA, boardA, columnA, userA, taskB, boardB, columnB, userB],
     );
     await client.query(
@@ -486,8 +524,8 @@ database('PostgreSQL invariants', () => {
       [departmentA, userB],
     );
     await client.query(
-      `insert into tasks(id,board_id,column_id,title,author_id,position)
-       values ($1,$2,$3,'department access',$4,1)`,
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,position)
+       values ($1,$2,$3,'department access',$4,$4,1)`,
       [crypto.randomUUID(), boardA, columnA, userB],
     );
     await expect(
@@ -502,8 +540,8 @@ database('PostgreSQL invariants', () => {
     const taskId = crypto.randomUUID();
     const entryId = crypto.randomUUID();
     await client.query(
-      `insert into tasks(id,board_id,column_id,title,author_id,position)
-       values ($1,$2,$3,'timer cleanup',$4,1)`,
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,position)
+       values ($1,$2,$3,'timer cleanup',$4,$4,1)`,
       [taskId, boardB, columnB, userB],
     );
     await client.query(
@@ -593,8 +631,8 @@ database('PostgreSQL invariants', () => {
     await expect(
       client.query(
         `insert into tasks(
-           id,board_id,column_id,title,author_id,assignee_name,position
-         ) values ($1,$2,$3,'invalid',$4,$5,1)`,
+           id,board_id,column_id,title,author_id,assignee_name,assignee_required,position
+         ) values ($1,$2,$3,'invalid',$4,$5,false,1)`,
         [crypto.randomUUID(), boardA, columnA, userA, 'Unsafe\u202ename'],
       ),
     ).rejects.toMatchObject({ code: '23514' });
@@ -604,8 +642,8 @@ database('PostgreSQL invariants', () => {
     const taskId = crypto.randomUUID();
     await client.query(
       `insert into tasks(
-         id,board_id,column_id,title,author_id,assignee_name,position
-       ) values ($1,$2,$3,'valid',$4,'External person',1)`,
+         id,board_id,column_id,title,author_id,assignee_name,assignee_required,position
+       ) values ($1,$2,$3,'valid',$4,'External person',false,1)`,
       [taskId, boardA, columnA, userA],
     );
     await client.query(

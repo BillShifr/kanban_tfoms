@@ -8,16 +8,14 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const password = 'Progress-test-2026!';
   const email = `progress-${suffix}@example.test`;
-  expect(
-    (
-      await request.post('/api/auth/sign-in', {
-        data: {
-          email: process.env.E2E_EMAIL ?? 'admin@example.com',
-          password: process.env.E2E_PASSWORD ?? 'change-me-now',
-        },
-      })
-    ).status(),
-  ).toBe(200);
+  const signInResponse = await request.post('/api/auth/sign-in', {
+    data: {
+      email: process.env.E2E_EMAIL ?? 'admin@example.com',
+      password: process.env.E2E_PASSWORD ?? 'change-me-now',
+    },
+  });
+  expect(signInResponse.status()).toBe(200);
+  const currentUser = (await signInResponse.json()).user as { id: string };
   const accountResponse = await request.post('/api/admin/users', {
     data: { email, password, role: 'user' },
   });
@@ -38,7 +36,11 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
   try {
     const detail = await (await request.get(`/api/boards/${board.id}`)).json();
     const taskResponse = await request.post(`/api/boards/${board.id}/tasks`, {
-      data: { title: `Secret task ${suffix}`, columnId: detail.columns[0].id },
+      data: {
+        title: `Secret task ${suffix}`,
+        columnId: detail.columns[0].id,
+        assigneeId: currentUser.id,
+      },
     });
     expect(taskResponse.status()).toBe(201);
     taskId = (await taskResponse.json()).task.id;
@@ -538,8 +540,13 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     });
     // dnd-kit briefly suppresses the click immediately following a pointer
     // drop. Exercise the keyboard path here instead of racing that guard.
-    await firstColumnToggle.focus();
-    await page.keyboard.press('Enter');
+    await firstColumnToggle.press('Enter');
+    await expect(
+      page.getByRole('button', {
+        name: `Развернуть колонку ${detail.columns[0].name}`,
+        exact: true,
+      }),
+    ).toBeVisible();
     const folded = page.getByRole('region', { name: 'Свёрнутые колонки' });
     await expect(folded).toHaveCount(1);
     await expect(folded.locator('.column')).toHaveCount(2);

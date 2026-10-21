@@ -10,6 +10,7 @@ import {
   index,
   uniqueIndex,
   check,
+  boolean,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 export const userRole = pgEnum('user_role', ['superadmin', 'admin', 'user']);
@@ -184,6 +185,7 @@ export const tasks = pgTable(
       onDelete: 'restrict',
     }),
     assigneeName: text('assignee_name'),
+    assigneeRequired: boolean('assignee_required').notNull().default(true),
     topicId: uuid('topic_id').references(() => topics.id, {
       onDelete: 'restrict',
     }),
@@ -207,6 +209,10 @@ export const tasks = pgTable(
     check(
       'tasks_assignee_shape_check',
       sql`NOT (${t.assigneeId} IS NOT NULL AND ${t.assigneeName} IS NOT NULL) AND (${t.assigneeName} IS NULL OR kanban_valid_assignee_name(${t.assigneeName}))`,
+    ),
+    check(
+      'tasks_registered_assignee_required',
+      sql`NOT ${t.assigneeRequired} OR (${t.assigneeId} IS NOT NULL AND ${t.assigneeName} IS NULL)`,
     ),
     check('tasks_estimated_minutes_check', sql`${t.estimatedMinutes} >= 0`),
     check('tasks_position_positive', sql`${t.position} > 0`),

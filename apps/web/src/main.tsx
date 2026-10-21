@@ -156,6 +156,7 @@ type Task = {
   author?: Person;
   assigneeId?: string | null;
   assigneeName?: string | null;
+  assigneeRequired?: boolean;
   topicId?: string | null;
   labelIds?: string[];
   labels?: Tag[];
@@ -257,6 +258,7 @@ const ru: Record<string, string> = {
   ALREADY_MEMBER: 'Пользователь уже добавлен на эту доску',
   USER_NOT_FOUND: 'Пользователь не найден',
   ASSIGNMENT_TARGET_NOT_FOUND: 'Выбранный отдел или доска не найдены',
+  ASSIGNEE_REQUIRED: 'Выберите исполнителя с учётной записью',
   LAST_SUPERADMIN: 'В системе должен остаться хотя бы один суперадминистратор',
   SELF_ROLE_CHANGE: 'Нельзя изменить собственную роль',
   SELF_DELETE: 'Нельзя отключить свою учётную запись',
@@ -366,11 +368,13 @@ function AssigneeCombobox({
   value,
   onChange,
   disabled = false,
+  requiredAccount = false,
 }: {
   members: Person[];
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  requiredAccount?: boolean;
 }) {
   const combobox = useCombobox({
       onDropdownClose: () => combobox.resetSelectedOption(),
@@ -397,7 +401,7 @@ function AssigneeCombobox({
         personOptionLabel(member).toLocaleLowerCase('ru-RU') ===
           normalizedSearch,
     ),
-    canUseText = search.trim().length > 0 && !exactMember;
+    canUseText = !requiredAccount && search.trim().length > 0 && !exactMember;
   useEffect(() => setSearch(selectedLabel), [selectedLabel]);
   const choose = (next: string) => {
     const resolved = next === 'none:' ? '' : next;
@@ -413,7 +417,7 @@ function AssigneeCombobox({
       <Combobox.Target>
         <TextInput
           label="Исполнитель"
-          placeholder="Не назначен"
+          placeholder={requiredAccount ? 'Выберите сотрудника' : 'Не назначен'}
           value={search}
           onFocus={(event) => {
             event.currentTarget.select();
@@ -431,14 +435,17 @@ function AssigneeCombobox({
           }}
           maxLength={120}
           disabled={disabled}
+          required={requiredAccount}
           rightSection={<Combobox.Chevron />}
         />
       </Combobox.Target>
       <Combobox.Dropdown style={{ maxHeight: 240, overflowY: 'auto' }}>
         <Combobox.Options>
-          <Combobox.Option value="none:" active={!value}>
-            Не назначен
-          </Combobox.Option>
+          {!requiredAccount && (
+            <Combobox.Option value="none:" active={!value}>
+              Не назначен
+            </Combobox.Option>
+          )}
           {visibleMembers.length > 0 && (
             <Combobox.Group label="Участники доски">
               {visibleMembers.map((member) => (
@@ -1366,13 +1373,16 @@ function ArchivedBoardsDrawer({
 function QuickAdd({
   board,
   column,
+  members,
   refresh,
 }: {
   board: string;
   column: string;
+  members: Person[];
   refresh: () => Promise<unknown>;
 }) {
   const [t, setT] = useState(''),
+    [assigneeId, setAssigneeId] = useState<string | null>(null),
     [e, setE] = useState(''),
     [expanded, setExpanded] = useState(false);
   if (!expanded)
@@ -1395,9 +1405,10 @@ function QuickAdd({
         try {
           await api(`/boards/${board}/tasks`, {
             method: 'POST',
-            body: JSON.stringify({ columnId: column, title: t }),
+            body: JSON.stringify({ columnId: column, title: t, assigneeId }),
           });
           setT('');
+          setAssigneeId(null);
           await refresh();
         } catch (y) {
           setE(err(y));
@@ -1412,13 +1423,30 @@ function QuickAdd({
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             setT('');
+            setAssigneeId(null);
             setExpanded(false);
           }
         }}
         autoFocus
         required
+        className="quick-title"
       />
-      <Button type="submit">Добавить</Button>
+      <Select
+        className="quick-assignee"
+        label="Исполнитель"
+        placeholder="Выберите сотрудника"
+        searchable
+        required
+        value={assigneeId}
+        onChange={setAssigneeId}
+        data={members.map((member) => ({
+          value: member.id,
+          label: personOptionLabel(member),
+        }))}
+      />
+      <Button type="submit" disabled={!t.trim() || !assigneeId}>
+        Добавить
+      </Button>
       <Tooltip label="Отмена">
         <ActionIcon
           variant="subtle"
@@ -1427,6 +1455,7 @@ function QuickAdd({
           aria-label="Отмена"
           onClick={() => {
             setT('');
+            setAssigneeId(null);
             setExpanded(false);
           }}
         >
@@ -1863,7 +1892,12 @@ function KanbanColumn({
         </small>
       )}
       <div className="column-tasks" hidden={collapsed}>
-        <QuickAdd board={boardId} column={column.id} refresh={refresh} />
+        <QuickAdd
+          board={boardId}
+          column={column.id}
+          members={data.members ?? []}
+          refresh={refresh}
+        />
         <SortableContext
           items={tasks.map((task) => task.id)}
           strategy={verticalListSortingStrategy}
@@ -2580,6 +2614,7 @@ function TaskModal({
                     value={assignee}
                     onChange={setAssignee}
                     disabled={!editing}
+                    requiredAccount={Boolean(task.assigneeRequired)}
                   />
                   <Select
                     label="Тема"
@@ -2713,7 +2748,14 @@ function TaskModal({
                 />
                 <Group justify="space-between" className="task-actions">
                   {editing ? (
-                    <Button type="submit" disabled={busy}>
+                    <Button
+                      type="submit"
+                      disabled={
+                        busy ||
+                        (Boolean(task.assigneeRequired) &&
+                          !assignee.startsWith('user:'))
+                      }
+                    >
                       Сохранить изменения
                     </Button>
                   ) : (

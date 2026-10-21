@@ -161,16 +161,14 @@ const taskCreate = z
     columnId: z.string().uuid(),
     title: fields.title,
     description: fields.description.optional().default(''),
-    assigneeId: fields.assigneeId.optional().default(null),
-    assigneeName: fields.assigneeName.optional().default(null),
+    assigneeId: z.string().uuid(),
     topicId: fields.topicId.optional().default(null),
     labelIds: fields.labelIds.optional().default([]),
     color: fields.color.optional().default(null),
     dueAt: fields.dueAt.optional().default(null),
     estimatedMinutes: fields.estimatedMinutes.optional().default(null),
   })
-  .strict()
-  .refine((value) => !(value.assigneeId && value.assigneeName));
+  .strict();
 const taskPatch = z
   .object({
     title: fields.title.optional(),
@@ -390,6 +388,7 @@ async function boardTasks(boardId: string, includeArchived = false) {
       authorId: tasks.authorId,
       assigneeId: tasks.assigneeId,
       assigneeName: tasks.assigneeName,
+      assigneeRequired: tasks.assigneeRequired,
       topicId: tasks.topicId,
       color: tasks.color,
       dueAt: tasks.dueAt,
@@ -1240,7 +1239,6 @@ export async function buildApp() {
         description: p.data.description,
         authorId: u.id,
         assigneeId: p.data.assigneeId,
-        assigneeName: p.data.assigneeName,
         topicId: p.data.topicId,
         color: p.data.color,
         dueAt: p.data.dueAt,
@@ -1275,20 +1273,15 @@ export async function buildApp() {
     if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
       return;
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
-    if (!(await activeTask(b.data, t.data)))
-      return reply.code(404).send({ code: 'TASK_NOT_FOUND' });
+    const currentTask = await activeTask(b.data, t.data);
+    if (!currentTask) return reply.code(404).send({ code: 'TASK_NOT_FOUND' });
+    const assignmentTouched =
+      Object.hasOwn(p.data, 'assigneeId') ||
+      Object.hasOwn(p.data, 'assigneeName');
     const bad = await validateMeta(b.data, p.data);
     if (bad) return reply.code(404).send({ code: bad });
-    await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const { labelIds, ...values } = p.data;
-      const assignmentTouched =
-        Object.hasOwn(p.data, 'assigneeId') ||
-        Object.hasOwn(p.data, 'assigneeName');
-      if (assignmentTouched)
-        Object.assign(values, {
-          assigneeId: p.data.assigneeId ?? null,
-          assigneeName: p.data.assigneeName ?? null,
-        });
       await tx.execute(
         sql`select id from tasks where id = ${t.data} for update`,
       );
@@ -1297,11 +1290,23 @@ export async function buildApp() {
           .select({
             assigneeId: tasks.assigneeId,
             assigneeName: tasks.assigneeName,
+            assigneeRequired: tasks.assigneeRequired,
           })
           .from(tasks)
           .where(eq(tasks.id, t.data))
           .limit(1)
       )[0];
+      const nextAssigneeId = assignmentTouched
+        ? (p.data.assigneeId ?? null)
+        : previous?.assigneeId;
+      if (previous?.assigneeRequired && !nextAssigneeId)
+        return 'ASSIGNEE_REQUIRED' as const;
+      if (assignmentTouched)
+        Object.assign(values, {
+          assigneeId: p.data.assigneeId ?? null,
+          assigneeName: p.data.assigneeName ?? null,
+          ...(p.data.assigneeId ? { assigneeRequired: true } : {}),
+        });
       await tx
         .update(tasks)
         .set({ ...values, updatedAt: new Date() })
@@ -1329,7 +1334,10 @@ export async function buildApp() {
           toAssigneeId: p.data.assigneeId ?? null,
           toAssigneeName: p.data.assigneeName ?? null,
         });
+      return 'OK' as const;
     });
+    if (result === 'ASSIGNEE_REQUIRED')
+      return reply.code(400).send({ code: result });
     return { task: { id: t.data } };
   });
   app.post('/boards/:boardId/tasks/:taskId/move', async (r, reply) => {
@@ -2038,7 +2046,11 @@ export async function buildApp() {
           `);
           await tx
             .update(tasks)
-            .set({ assigneeId: null, updatedAt: now })
+            .set({
+              assigneeId: null,
+              assigneeRequired: false,
+              updatedAt: now,
+            })
             .where(eq(tasks.assigneeId, targetId.data));
           await tx
             .update(timeEntries)
@@ -2114,7 +2126,11 @@ export async function buildApp() {
       `);
       await tx
         .update(tasks)
-        .set({ assigneeId: null, updatedAt: now })
+        .set({
+          assigneeId: null,
+          assigneeRequired: false,
+          updatedAt: now,
+        })
         .where(eq(tasks.assigneeId, targetId.data));
       await tx
         .update(users)
@@ -2233,7 +2249,8 @@ export async function buildApp() {
         where t.assignee_id = ${targetId.data}
           and not kanban_has_board_access(t.board_id, ${targetId.data})
       `);
-      await tx.execute(sql`update tasks set assignee_id=null, updated_at=${now}
+      await tx.execute(sql`update tasks
+        set assignee_id=null, assignee_required=false, updated_at=${now}
         where assignee_id=${targetId.data} and not kanban_has_board_access(board_id, ${targetId.data})`);
       await tx.execute(sql`update time_entries set stopped_at=${now}
         where user_id=${targetId.data} and stopped_at is null and task_id in (
