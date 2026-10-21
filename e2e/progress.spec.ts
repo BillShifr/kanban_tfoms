@@ -344,10 +344,15 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       await page
         .locator('.points-celebration')
         .evaluate((el) => getComputedStyle(el).animationName),
-    ).toBe('points-arrive');
-    await page
-      .getByRole('button', { name: 'Закрыть уведомление о баллах' })
-      .click();
+    ).toBe('points-card');
+    await expect(page.locator('.points-celebration img')).toHaveAttribute(
+      'src',
+      '/achievements/initiative.png',
+    );
+    await expect(page.locator('.points-celebration')).toContainText(
+      'Баллы добавлены в рейтинг месяца',
+    );
+    await expect(page.locator('.points-celebration')).toHaveCount(0);
     for (const column of [
       detail.columns.at(-1),
       detail.columns[0],
@@ -382,9 +387,11 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     ).toEqual(['initiative', 'result']);
     await profile.getByRole('button', { name: 'Сохранить профиль' }).click();
     await expect(page.locator('.points-celebration')).toContainText('+10');
-    await page
-      .getByRole('button', { name: 'Закрыть уведомление о баллах' })
-      .click();
+    await expect(page.locator('.points-celebration img')).toHaveAttribute(
+      'src',
+      '/achievements/result.png',
+    );
+    await expect(page.locator('.points-celebration')).toHaveCount(0);
     await profile.getByRole('tab', { name: 'Достижения', exact: true }).click();
     await profile.getByRole('button', { name: /Искра/ }).click();
     await expect(

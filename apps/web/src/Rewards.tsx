@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, Text } from '@mantine/core';
-import { LockKeyhole, Sparkles, Trophy } from 'lucide-react';
+import { Text } from '@mantine/core';
+import { LockKeyhole, Trophy } from 'lucide-react';
 import { RewardAvatar } from './RewardAvatar';
 
 export type RewardsData = {
@@ -205,7 +205,7 @@ export function PointCelebration({
   }, [events, userId]);
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 2400);
+    const timer = window.setTimeout(() => setNotice(null), 3200);
     return () => window.clearTimeout(timer);
   }, [notice]);
   return notice
@@ -214,34 +214,36 @@ export function PointCelebration({
           <div
             key={notice.key}
             className="points-celebration"
+            data-kind={notice.completed ? 'completed' : 'created'}
             role="status"
             aria-live="polite"
           >
-            <Sparkles size={24} aria-hidden="true" />
-            <div>
-              <strong>
-                +{notice.points}{' '}
-                <span>
+            <div className="points-emblem" aria-hidden="true">
+              <span />
+              <img
+                src={`/achievements/${notice.completed ? 'result' : 'initiative'}.png`}
+                alt=""
+              />
+            </div>
+            <div className="points-copy">
+              <span className="points-eyebrow">Вклад в команду</span>
+              <strong className="points-value">
+                <span>+{notice.points}</span>
+                <small>
                   {new Intl.PluralRules('ru').select(notice.points) === 'one'
                     ? 'балл'
                     : new Intl.PluralRules('ru').select(notice.points) === 'few'
                       ? 'балла'
                       : 'баллов'}
-                </span>
+                </small>
               </strong>
-              <span>
+              <span className="points-reason">
                 {notice.completed ? 'Задача завершена' : 'Задача создана'}
               </span>
+              <span className="points-caption">
+                Баллы добавлены в рейтинг месяца
+              </span>
             </div>
-            <Button
-              variant="subtle"
-              color="gray"
-              size="compact-xs"
-              aria-label="Закрыть уведомление о баллах"
-              onClick={() => setNotice(null)}
-            >
-              ×
-            </Button>
           </div>
         </div>,
         document.body,

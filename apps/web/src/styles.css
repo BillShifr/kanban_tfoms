@@ -1405,78 +1405,190 @@ a {
   position: absolute;
   inset: 0;
   background: light-dark(#faf8ff20, #17102020);
-  animation: points-backdrop 2.4s ease both;
+  animation: points-backdrop 3.2s ease both;
 }
 .points-celebration {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
-  padding: 22px 28px;
-  max-width: calc(100vw - 32px);
-  border: 1px solid light-dark(#e2d6f2, #68537f);
-  border-radius: 24px;
-  background: light-dark(#fffaff, #282131);
+  gap: 24px;
+  width: min(480px, calc(100vw - 32px));
+  padding: 28px 34px 28px 24px;
+  border: 1px solid light-dark(#ded4ea, #594b66);
+  border-radius: 28px;
+  background:
+    radial-gradient(
+      circle at 15% 50%,
+      light-dark(#eee5fb, #392b48),
+      transparent 37%
+    ),
+    light-dark(#fffdfd, #241f2a);
   color: var(--app-text);
   font-family: Manrope, sans-serif;
-  box-shadow: 0 16px 60px #381a5526;
-  animation: points-arrive 2.4s ease both;
-}
-.points-celebration button {
-  pointer-events: auto;
-}
-.points-celebration strong {
-  color: light-dark(#7141b2, #dfc5ff);
+  box-shadow: 0 24px 80px light-dark(#32184b26, #00000066);
+  animation: points-card 3.2s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 @keyframes points-backdrop {
-  0%,
+  0% {
+    backdrop-filter: blur(0);
+    opacity: 0;
+  }
+  14%,
+  78% {
+    backdrop-filter: blur(5px);
+    opacity: 1;
+  }
   100% {
     backdrop-filter: blur(0);
     opacity: 0;
   }
-  18%,
-  70% {
-    backdrop-filter: blur(2px);
-    opacity: 1;
-  }
 }
-.points-celebration > svg {
-  color: var(--app-accent);
-}
-.points-celebration > div {
+.points-emblem {
+  position: relative;
+  width: 104px;
+  height: 104px;
   display: grid;
-  gap: 4px;
+  place-items: center;
+  animation: points-emblem-arrive 3.2s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.points-celebration strong {
-  font-size: 42px;
+.points-emblem::before,
+.points-emblem span {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid light-dark(#cdb5e9, #71578e);
+  border-radius: 50%;
+  box-shadow: 0 0 28px light-dark(#8452bd30, #c99cff35);
+}
+.points-emblem span {
+  inset: 15px;
+  border-style: dashed;
+  opacity: 0.65;
+  animation: points-orbit 8s linear infinite;
+}
+.points-emblem img {
+  position: relative;
+  width: 86px;
+  height: 86px;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 12px #32184b30);
+}
+.points-copy {
+  display: grid;
+  gap: 3px;
+  animation: points-copy-arrive 3.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.points-eyebrow {
+  color: var(--app-muted);
+  font-size: 10px;
   font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+.points-value {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  color: light-dark(#7141b2, #dfc5ff);
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
-.points-celebration strong span {
-  font-size: 13px;
-  font-weight: 600;
+.points-value > span {
+  font-size: 56px;
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  text-shadow: 0 0 24px light-dark(#8753d62b, #cfa7ff38);
 }
-.points-celebration > div > span {
+.points-value small {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.points-reason {
+  margin-top: 5px;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.points-caption {
   font-size: 12px;
+  font-weight: 500;
   color: var(--app-muted);
 }
-@keyframes points-arrive {
-  0% {
-    transform: translateY(12px) scale(0.95);
+@keyframes points-card {
+  0%,
+  16% {
+    transform: translateY(14px) scale(0.96);
     opacity: 0;
   }
-  18%,
-  75% {
+  27%,
+  78% {
     transform: translateY(0) scale(1);
     opacity: 1;
   }
   100% {
-    transform: translateY(-16px);
+    transform: translateY(-12px) scale(0.98);
     opacity: 0;
   }
 }
+@keyframes points-emblem-arrive {
+  0%,
+  19% {
+    transform: scale(0.58) rotate(-12deg);
+    opacity: 0;
+  }
+  32%,
+  78% {
+    transform: scale(1) rotate(0);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.94);
+    opacity: 0;
+  }
+}
+@keyframes points-copy-arrive {
+  0%,
+  27% {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+  39%,
+  78% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(5px);
+    opacity: 0;
+  }
+}
+@keyframes points-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
 @media (max-width: 600px) {
+  .points-celebration {
+    grid-template-columns: 86px minmax(0, 1fr);
+    gap: 14px;
+    padding: 22px 20px 22px 16px;
+  }
+  .points-emblem {
+    width: 82px;
+    height: 82px;
+  }
+  .points-emblem img {
+    width: 68px;
+    height: 68px;
+  }
+  .points-value > span {
+    font-size: 46px;
+  }
+  .points-reason {
+    font-size: 16px;
+  }
   .frame-collection {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1510,6 +1622,11 @@ a {
   .reward-avatar:not(.frame-none)::before,
   .reward-avatar.winner-aura::after,
   .points-celebration {
+    animation: none;
+  }
+  .points-emblem,
+  .points-copy,
+  .points-emblem span {
     animation: none;
   }
   .points-stage::before {
