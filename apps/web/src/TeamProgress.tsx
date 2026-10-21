@@ -55,6 +55,12 @@ type Profile = { user: Member; bio: string; hasAvatar: boolean };
 type Request = <T>(path: string, options?: RequestInit) => Promise<T>;
 const name = (u: Member) =>
   [u.lastName, u.firstName].filter(Boolean).join(' ') || u.email;
+const gameDialogClasses = {
+  content: 'team-dialog',
+  header: 'team-dialog-header',
+  title: 'team-dialog-title',
+  close: 'team-dialog-close',
+};
 const milestones = [
   {
     title: 'Первый шаг',
@@ -162,6 +168,7 @@ function Achievements({
         title="Условие достижения"
         centered
         size={440}
+        classNames={gameDialogClasses}
       >
         {selected && (
           <div className="achievement-detail">
@@ -542,23 +549,25 @@ export function TeamProgress({
                 <b>{person.rank ?? '—'}</b>
                 <small>место</small>
               </span>
-              <RewardAvatar
-                name={name(person)}
-                frame={person.frame}
-                winnerPlace={person.winnerPlace}
-                size={32}
-                src={
-                  person.hasAvatar
-                    ? `/api/profile/avatar/${person.id}`
-                    : undefined
-                }
-              />
-              <div>
-                <strong title={name(person)}>
-                  {name(person)}
-                  {person.id === user.id ? ' · вы' : ''}
-                </strong>
-                <small>Завершено: {person.monthCompleted}</small>
+              <div className="leader-identity">
+                <RewardAvatar
+                  name={name(person)}
+                  frame={person.frame}
+                  winnerPlace={person.winnerPlace}
+                  size={32}
+                  src={
+                    person.hasAvatar
+                      ? `/api/profile/avatar/${person.id}`
+                      : undefined
+                  }
+                />
+                <div className="leader-name">
+                  <strong title={name(person)}>{name(person)}</strong>
+                  <small>
+                    {person.id === user.id && <em>Вы</em>}
+                    Завершено: {person.monthCompleted}
+                  </small>
+                </div>
               </div>
               <span className="leader-points">
                 <b>{person.points.toLocaleString('ru-RU')}</b>
@@ -574,15 +583,15 @@ export function TeamProgress({
       <PointCelebration events={data?.recentEvents} userId={user.id} />
       <aside className="team-rail" aria-label="Команда и достижения">
         <div className="team-rail-heading">
-          <h2>Команда и достижения</h2>
-          <p>{period}</p>
+          <span className="season-kicker">Команда и достижения</span>
+          <h2>{period}</h2>
         </div>
         {scopeControl}
         {loadState}
         {data && (
           <>
             <section className="team-score" aria-label="Ваш результат">
-              <span>Ваш вклад за месяц</span>
+              <span>Ваш результат</span>
               <div className="team-score-number">
                 <strong>{data.me.points.toLocaleString('ru-RU')}</strong>
                 <span>баллов</span>
@@ -620,10 +629,20 @@ export function TeamProgress({
                 </small>
                 <strong>{next ? next.title : 'Все восемь достижений'}</strong>
                 <span>
-                  {next
-                    ? `${data.me[next.key]} / ${next.goal} · ${next.description}`
-                    : 'Посмотреть свои результаты'}
+                  {next ? next.description : 'Посмотреть свои результаты'}
                 </span>
+                {next && (
+                  <span className="next-achievement-progress">
+                    <progress
+                      value={Math.min(data.me[next.key], next.goal)}
+                      max={next.goal}
+                      aria-label={`Прогресс: ${next.title}`}
+                    />
+                    <small>
+                      {data.me[next.key]} / {next.goal}
+                    </small>
+                  </span>
+                )}
               </span>
               <ChevronRight size={16} />
             </button>
@@ -677,7 +696,7 @@ export function TeamProgress({
         size={760}
         centered
         title="Команда и достижения"
-        classNames={{ content: 'team-dialog' }}
+        classNames={gameDialogClasses}
       >
         {scopeControl}
         {loadState}
@@ -760,6 +779,7 @@ export function TeamProgress({
         title="Рамки и награды"
         size={760}
         centered
+        classNames={gameDialogClasses}
       >
         {data && (
           <RewardWardrobe

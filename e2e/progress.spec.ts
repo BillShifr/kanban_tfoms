@@ -91,11 +91,11 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
         family: getComputedStyle(el).fontFamily,
       }));
     expect(numericStyles).toMatchObject({
-      size: '32px',
+      size: '26px',
       variant: 'tabular-nums',
       weight: '800',
     });
-    expect(numericStyles.family).toContain('Barlow Condensed');
+    expect(numericStyles.family).toContain('Manrope');
     await expect(drawer.locator('.leader-position small').first()).toHaveText(
       'место',
     );
@@ -151,10 +151,49 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     ]);
     await drawer.evaluate(() => document.fonts.ready);
     expect(
-      await drawer.evaluate(() =>
-        document.fonts.check('800 32px "Barlow Condensed"'),
-      ),
+      await drawer.evaluate(() => document.fonts.check('800 26px "Manrope"')),
     ).toBe(true);
+    const layout = await drawer.locator('.leader-list li').evaluateAll((rows) =>
+      rows.map((row) => {
+        const identity = row.querySelector('.leader-identity')!;
+        const points = row.querySelector('.leader-points')!;
+        const title = row.querySelector('strong')!;
+        return {
+          separated:
+            identity.getBoundingClientRect().right <=
+            points.getBoundingClientRect().left,
+          truncated: getComputedStyle(title).textOverflow === 'ellipsis',
+          fits: row.scrollWidth <= row.clientWidth,
+        };
+      }),
+    );
+    for (const row of layout) {
+      expect(row).toEqual({ separated: true, truncated: true, fits: true });
+    }
+    const largeScoreFits = await drawer
+      .locator('.leader-list li')
+      .first()
+      .evaluate((row) => {
+        const sample = row.cloneNode(true) as HTMLElement;
+        row.parentElement!.append(sample);
+        try {
+          sample.querySelector('.leader-points b')!.textContent = '999 999';
+          sample.querySelector('.leader-name strong')!.textContent =
+            'Очень длинная фамилия участника';
+          const title = sample
+            .querySelector('.leader-name')!
+            .getBoundingClientRect();
+          const score = sample
+            .querySelector('.leader-points b')!
+            .getBoundingClientRect();
+          return (
+            title.right < score.left && sample.scrollWidth <= sample.clientWidth
+          );
+        } finally {
+          sample.remove();
+        }
+      });
+    expect(largeScoreFits).toBe(true);
     await expect(drawer.locator('[data-podium="1"]').first()).toBeVisible();
     await expect(drawer.locator('.achievement')).toHaveCount(8);
     await drawer.getByText('Доступные доски', { exact: true }).click();
