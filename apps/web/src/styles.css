@@ -195,6 +195,16 @@ a {
 .user-menu-trigger {
   margin-left: 0;
   color: var(--app-soft);
+  height: 48px;
+  overflow: visible;
+  padding-inline: 12px;
+}
+.user-menu-trigger .reward-avatar:not(.frame-none)::after {
+  opacity: 0.5;
+  filter: blur(5px);
+}
+.user-menu-trigger .mantine-Button-section[data-position='left'] {
+  margin-right: 14px;
 }
 .header-rewards-slot {
   margin-left: auto;

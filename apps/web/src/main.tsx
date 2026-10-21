@@ -557,7 +557,7 @@ function UserMenu({
             <RewardAvatar
               name={personLabel(user)}
               frame={profile.data?.frame}
-              size={28}
+              size={32}
               src={
                 profile.data?.hasAvatar
                   ? `/api/profile/avatar/${user.id}?v=${profile.dataUpdatedAt}`

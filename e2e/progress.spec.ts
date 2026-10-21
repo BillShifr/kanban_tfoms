@@ -385,6 +385,19 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       profile.getByRole('button', { name: /Искра/ }),
     ).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('.user-menu-trigger .frame-trail')).toBeVisible();
+    const headerFrame = page.locator('.user-menu-trigger .frame-trail');
+    expect(
+      await headerFrame.evaluate((avatar) => {
+        const glow = getComputedStyle(avatar, '::after');
+        const button = avatar.closest('button')!;
+        return {
+          overflow: getComputedStyle(button).overflow,
+          size: avatar.getBoundingClientRect().width,
+          glow: Number(glow.opacity),
+          background: glow.backgroundImage,
+        };
+      }),
+    ).toMatchObject({ overflow: 'visible', size: 32, glow: 0.5 });
     await expect(page.locator('.points-celebration')).toHaveCount(0);
     await page.reload();
     await expect(page.locator('.user-menu-trigger .frame-trail')).toBeVisible();
