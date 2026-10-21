@@ -314,10 +314,7 @@ test.describe('core board workflow', () => {
       page.getByTestId('kanban-column').first().locator('header h2'),
     );
     await expectReadableText(
-      page
-        .getByTestId('kanban-column')
-        .first()
-        .locator('.column-header-actions > span'),
+      page.getByTestId('kanban-column').first().locator('.task-count'),
     );
     await expectReadableText(
       page.getByPlaceholder('Поиск по задачам'),
@@ -449,6 +446,28 @@ test.describe('core board workflow', () => {
     ).toBeVisible();
   });
 
+  test('closes the mobile drawer with its close control and Escape', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'mobile', 'Mobile-only navigation');
+    await signIn(page);
+
+    let drawer = await openNavigation(page);
+    const closeButton = drawer.getByRole('button', {
+      name: 'Закрыть меню досок',
+    });
+    await expect(closeButton).toBeVisible();
+    const closeButtonBox = await closeButton.boundingBox();
+    expect(closeButtonBox?.width).toBeGreaterThanOrEqual(44);
+    expect(closeButtonBox?.height).toBeGreaterThanOrEqual(44);
+    await closeButton.click();
+    await expect(drawer).toBeHidden();
+
+    drawer = await openNavigation(page);
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+  });
+
   test('keeps responsive overflow inside the board', async ({ page }) => {
     await signIn(page);
     await createBoardForTest(page);
@@ -470,7 +489,26 @@ test.describe('core board workflow', () => {
     const headerBox = await header.boundingBox();
     const columnBox = await firstColumn.boundingBox();
     expect(headerBox?.height).toBeGreaterThanOrEqual(48);
-    expect(headerBox?.height).toBeLessThanOrEqual(72);
+    // Profile belongs to the right-hand user menu; achievements have their own region.
+    expect(headerBox?.height).toBe(56);
+    const profileBox = await header.locator('.user-menu-trigger').boundingBox();
+    expect(profileBox).not.toBeNull();
+    expect(profileBox!.x + profileBox!.width).toBeGreaterThanOrEqual(
+      metrics.viewport - 20,
+    );
+    expect(profileBox!.x + profileBox!.width).toBeLessThanOrEqual(
+      metrics.viewport,
+    );
+    if (metrics.viewport > 1100) {
+      const rail = page.getByRole('complementary', {
+        name: 'Команда и достижения',
+      });
+      await expect(rail).toBeVisible();
+      const railBox = await rail.boundingBox();
+      expect(railBox!.x).toBeGreaterThan(columnBox!.x);
+    } else {
+      await expect(page.locator('.team-mobile-bar')).toBeVisible();
+    }
     expect(columnBox?.width).toBeGreaterThanOrEqual(280);
     expect(columnBox?.width).toBeLessThanOrEqual(340);
   });
@@ -1193,6 +1231,7 @@ test.describe('core board workflow', () => {
 
     const backlog = backlogColumn(page);
     const inProgress = columnByName(page, 'В работе');
+    const board = page.getByTestId('board-scroll');
     const card = backlog.getByTestId('task-card').filter({
       has: page.getByText(title, { exact: true }),
     });
@@ -1202,7 +1241,10 @@ test.describe('core board workflow', () => {
       }),
       cardBox = await card.boundingBox(),
       handleBox = await handle.boundingBox(),
-      targetBox = await inProgress.boundingBox();
+      targetBox = await inProgress.boundingBox(),
+      initialBoardScrollLeft = await board.evaluate(
+        (element) => element.scrollLeft,
+      );
     expect(cardBox).not.toBeNull();
     expect(handleBox).not.toBeNull();
     expect(targetBox).not.toBeNull();
@@ -1231,7 +1273,10 @@ test.describe('core board workflow', () => {
     });
     const lefts = samples.map(({ left }) => left),
       expectedLeft = pointerX - grabOffsetX,
-      placeholderBox = await card.boundingBox();
+      placeholderBox = await card.boundingBox(),
+      draggedBoardScrollLeft = await board.evaluate(
+        (element) => element.scrollLeft,
+      );
     expect(Math.max(...lefts) - Math.min(...lefts)).toBeLessThanOrEqual(1.5);
     for (const rect of samples) {
       expect(Math.abs(rect.left - expectedLeft)).toBeLessThanOrEqual(4);
@@ -1240,7 +1285,16 @@ test.describe('core board workflow', () => {
         targetBox!.x + targetBox!.width + 4,
       );
     }
-    expect(Math.abs(placeholderBox!.x - cardBox!.x)).toBeLessThanOrEqual(1);
+    // DndContext may horizontally auto-scroll the board while the pointer is
+    // near its edge. Compare positions in the board's scroll coordinate space,
+    // not viewport coordinates that move by the current scrollLeft.
+    expect(
+      Math.abs(
+        placeholderBox!.x +
+          draggedBoardScrollLeft -
+          (cardBox!.x + initialBoardScrollLeft),
+      ),
+    ).toBeLessThanOrEqual(1);
 
     await page.mouse.move(targetBox!.x + 8, targetBox!.y + 110, { steps: 8 });
     await expect(inProgress).toHaveClass(/drop-target/);
@@ -1291,6 +1345,79 @@ test.describe('core board workflow', () => {
     await expect(
       page.getByRole('textbox', { name: 'Описание', exact: true }),
     ).toHaveCount(0);
+  });
+
+  test('keeps comments unread until the recipient opens the task', async ({
+    page,
+    browser,
+  }) => {
+    await signIn(page);
+    const other = await createAccount(
+      page,
+      uniqueEmail('commenter'),
+      'comments-pass-123',
+      'admin',
+    );
+    const department = await createDepartmentForTest(page);
+    const board = await createBoardApi(page, department.id);
+    const payload = await (
+      await page.request.get(`/api/boards/${board.id}`)
+    ).json();
+    const title = uniqueName('Непрочитанное обсуждение');
+    const { task } = await (
+      await page.request.post(`/api/boards/${board.id}/tasks`, {
+        data: { title, columnId: payload.columns[0].id, assigneeId: other.id },
+      })
+    ).json();
+    const context = await browser.newContext();
+    try {
+      await context.request.post(
+        `${new URL(page.url()).origin}/api/auth/sign-in`,
+        {
+          data: { email: other.email, password: 'comments-pass-123' },
+        },
+      );
+      const response = await context.request.post(
+        `${new URL(page.url()).origin}/api/boards/${board.id}/tasks/${task.id}/comments`,
+        {
+          data: { body: 'Нужна проверка результата' },
+        },
+      );
+      expect(response.status()).toBe(201);
+      const ownBoard = await (
+        await context.request.get(
+          `${new URL(page.url()).origin}/api/boards/${board.id}`,
+        )
+      ).json();
+      expect(ownBoard.columns[0].tasks[0].unreadComments).toBe(0);
+      await page.reload();
+      await selectBoard(page, board.name, department.name);
+      const card = taskCard(page, title);
+      await expect(card.getByLabel('Новые комментарии: 1')).toBeVisible();
+      await card.locator('.card-open').click();
+      await expect(page.getByTestId('task-comment')).toContainText(
+        'Нужна проверка результата',
+      );
+      await expect
+        .poll(async () => {
+          const data = await (
+            await page.request.get(`/api/boards/${board.id}`)
+          ).json();
+          return data.columns[0].tasks[0].unreadComments;
+        })
+        .toBe(0);
+      await page
+        .getByRole('button', { name: 'Закрыть задачу', exact: true })
+        .click();
+      await expect(card.locator('.task-unread')).toHaveCount(0);
+      await page.reload();
+      await selectBoard(page, board.name, department.name);
+      await expect(taskCard(page, title).locator('.task-unread')).toHaveCount(
+        0,
+      );
+    } finally {
+      await context.close();
+    }
   });
 
   test('shows a task preview and lets participants discuss it', async ({
@@ -1595,7 +1722,9 @@ test.describe('core board workflow', () => {
 
     const card = taskCard(page, title);
     await expect(
-      card.getByTitle(`${externalAssignee} · имя`, { exact: true }),
+      card.getByTitle(`Исполнитель: ${externalAssignee} · без учётной записи`, {
+        exact: true,
+      }),
     ).toBeVisible();
 
     await page.getByRole('button', { name: /^Фильтры/ }).click();
@@ -1763,12 +1892,13 @@ test.describe('core board workflow', () => {
     const memberSelect = page.getByRole('textbox', {
       name: 'Добавить пользователя',
     });
-    await memberSelect.fill(memberEmail);
-    await expect(
-      page.getByRole('option', { name: memberEmail, exact: true }),
-    ).toBeVisible();
-    await memberSelect.press('ArrowDown');
-    await memberSelect.press('Enter');
+    await memberSelect.click();
+    const memberOption = page.getByRole('option', {
+      name: memberEmail,
+      exact: true,
+    });
+    await expect(memberOption).toBeVisible();
+    await memberOption.click();
     await page.getByRole('button', { name: 'Добавить на доску' }).click();
     await expect(page.getByText(memberEmail, { exact: true })).toBeVisible();
     await expect(

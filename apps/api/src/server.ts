@@ -50,6 +50,7 @@ import {
   type AccountRole,
 } from './policy.js';
 import { assertBootstrapCredentials, loadRuntimeConfig } from './config.js';
+import { rewardsFor } from './rewards.js';
 const runtime = loadRuntimeConfig();
 const cookieName = 'kanban_session',
   bodyLimit = 16 * 1024,
@@ -545,6 +546,192 @@ export async function buildApp() {
     const u = await user(r, reply);
     if (u) return { user: u };
   });
+  app.get('/profile', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const result = await pool.query(
+      'select bio, avatar is not null as "hasAvatar",selected_frame as frame from user_profiles where user_id=$1',
+      [u.id],
+    );
+    return {
+      user: u,
+      bio: result.rows[0]?.bio ?? '',
+      hasAvatar: result.rows[0]?.hasAvatar ?? false,
+      frame: result.rows[0]?.frame ?? 'none',
+    };
+  });
+  app.put('/profile/frame', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const p = z
+      .object({ frame: z.string().max(20) })
+      .strict()
+      .safeParse(r.body);
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const rewards = await rewardsFor(pool, u.id);
+    if (!rewards.frames.includes(p.data.frame))
+      return reply.code(403).send({ code: 'FRAME_LOCKED' });
+    await pool.query(
+      `insert into user_profiles(user_id,selected_frame) values($1,$2)
+       on conflict(user_id) do update set selected_frame=excluded.selected_frame`,
+      [u.id, p.data.frame],
+    );
+    return { frame: p.data.frame };
+  });
+  app.patch('/profile', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const p = z
+      .object({
+        firstName: z.string().trim().max(80),
+        lastName: z.string().trim().max(80),
+        bio: z.string().trim().max(240),
+      })
+      .strict()
+      .safeParse(r.body);
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    await db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({
+          firstName: p.data.firstName || null,
+          lastName: p.data.lastName || null,
+        })
+        .where(eq(users.id, u.id));
+      await tx.execute(
+        sql`insert into user_profiles(user_id,bio) values(${u.id},${p.data.bio}) on conflict(user_id) do update set bio=excluded.bio`,
+      );
+    });
+    return {
+      user: {
+        ...u,
+        firstName: p.data.firstName || null,
+        lastName: p.data.lastName || null,
+      },
+    };
+  });
+  app.post('/profile/avatar', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const file = await r.file({ limits: { fileSize: 524288, files: 1 } });
+    if (!file) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const bytes = await file.toBuffer();
+    const valid =
+      (file.mimetype === 'image/jpeg' &&
+        bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) ||
+      (file.mimetype === 'image/png' &&
+        bytes
+          .subarray(0, 8)
+          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+      (file.mimetype === 'image/webp' &&
+        bytes.subarray(0, 4).toString() === 'RIFF' &&
+        bytes.subarray(8, 12).toString() === 'WEBP');
+    if (!valid) return reply.code(400).send({ code: 'INVALID_IMAGE' });
+    await pool.query(
+      'insert into user_profiles(user_id,avatar,avatar_type) values($1,$2,$3) on conflict(user_id) do update set avatar=excluded.avatar,avatar_type=excluded.avatar_type',
+      [u.id, bytes, file.mimetype],
+    );
+    return reply.code(204).send();
+  });
+  app.delete('/profile/avatar', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    await pool.query(
+      'update user_profiles set avatar=null, avatar_type=null where user_id=$1',
+      [u.id],
+    );
+    return reply.code(204).send();
+  });
+  app.get('/profile/avatar/:userId', async (r, reply) => {
+    const u = await user(r, reply),
+      target = id(r, 'userId');
+    if (!u) return;
+    if (!target.success) return reply.code(404).send({ code: 'NOT_FOUND' });
+    // Avatars contain no task or permission data; only authenticated users can read.
+    const result = await pool.query(
+      'select p.avatar,p.avatar_type from user_profiles p join users u on u.id=p.user_id where p.user_id=$1 and u.archived_at is null',
+      [target.data],
+    );
+    if (!result.rows[0]?.avatar)
+      return reply.code(404).send({ code: 'NOT_FOUND' });
+    return reply
+      .type(result.rows[0].avatar_type)
+      .header('cache-control', 'private, no-store')
+      .send(result.rows[0].avatar);
+  });
+  app.get('/progress', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    const scope = z
+      .object({ scope: z.enum(['visible', 'global']).default('visible') })
+      .safeParse(r.query);
+    if (!scope.success)
+      return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const rewards = await rewardsFor(pool, u.id);
+    const result = await pool.query(
+      `with visible_events as (
+        select e.* from contribution_events e
+        join tasks t on t.id=e.task_id join boards b on b.id=t.board_id
+        where b.archived_at is null and (e.kind='created' or t.completed_at is not null)
+        and ($2::boolean
+          or exists(select 1 from board_members bm where bm.board_id=b.id and bm.user_id=$1)
+          or exists(select 1 from department_members dm where dm.department_id=b.department_id and dm.user_id=$1))
+      )
+      select u.id,u.first_name as "firstName",u.last_name as "lastName",u.email,
+        (p.avatar is not null) as "hasAvatar",coalesce(p.selected_frame,'none') as frame,
+        (select mr.place from monthly_rewards mr where mr.user_id=u.id
+         and mr.period=(date_trunc('month',now() at time zone 'UTC')-interval '1 month')::date) as "winnerPlace",
+        coalesce(sum(e.points) filter(where e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC'),0)::int as points,
+        count(*) filter(where e.kind='created' and e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC')::int as "monthCreated",
+        count(*) filter(where e.kind='completed' and e.created_at >= date_trunc('month',now() at time zone 'UTC') at time zone 'UTC')::int as "monthCompleted",
+        count(*) filter(where e.kind='created')::int as created,
+        count(*) filter(where e.kind='completed')::int as completed
+      from users u left join visible_events e on e.user_id=u.id
+      left join user_profiles p on p.user_id=u.id
+      where u.archived_at is null and ($3::boolean or e.user_id is not null)
+      group by u.id,p.avatar,p.selected_frame order by points desc, completed desc,u.id`,
+      [
+        u.id,
+        isElevated(u.role) || scope.data.scope === 'global',
+        scope.data.scope === 'global',
+      ],
+    );
+    const places = new Map<number, number>();
+    const ranked = result.rows.map((row, index) => {
+      if (row.points > 0 && !places.has(row.points))
+        places.set(row.points, index + 1);
+      return { ...row, rank: places.get(row.points) ?? null };
+    });
+    const recentEvents = await pool.query(
+      `select md5(e.task_id::text || ':' || e.kind) as id,e.kind,e.points,e.created_at as "createdAt"
+       from contribution_events e join tasks t on t.id=e.task_id join boards b on b.id=t.board_id
+       where e.user_id=$1 and e.created_at > now()-interval '1 day'
+         and b.archived_at is null and (e.kind='created' or t.completed_at is not null)
+       order by e.created_at desc limit 100`,
+      [u.id],
+    );
+    return {
+      rewards,
+      recentEvents: recentEvents.rows,
+      scope:
+        scope.data.scope === 'global'
+          ? 'Все сотрудники'
+          : 'Доступные вам доски',
+      period: new Date().toISOString().slice(0, 7),
+      leaders: ranked.slice(0, 20),
+      me: ranked.find((row) => row.id === u.id) ?? {
+        ...u,
+        points: 0,
+        created: 0,
+        completed: 0,
+        monthCreated: 0,
+        monthCompleted: 0,
+        rank: null,
+        hasAvatar: false,
+      },
+      participants: result.rows.length,
+    };
+  });
   app.post('/auth/sign-in', async (r, reply) => {
     const p = credentials.safeParse(r.body);
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
@@ -981,8 +1168,21 @@ export async function buildApp() {
             isNull(timeEntries.stoppedAt),
           ),
         );
+    const unread = await pool.query<{ task_id: string; count: number }>(
+      `select c.task_id, count(*)::int as count
+       from task_comment_unread n
+       join task_comments c on c.id=n.comment_id
+       join tasks t on t.id=c.task_id
+       where n.user_id=$1 and t.board_id=$2
+       group by c.task_id`,
+      [u.id, p.data],
+    );
+    const unreadCounts = new Map(
+      unread.rows.map((row) => [row.task_id, row.count]),
+    );
     const ts = rawTasks.map((task) => ({
       ...task,
+      unreadComments: unreadCounts.get(task.id) ?? 0,
       labelIds: task.labels.map((label) => label.id),
       activeTimer: active.find((entry) => entry.taskId === task.id) ?? null,
     }));
@@ -1361,6 +1561,27 @@ export async function buildApp() {
         },
       })),
     };
+  });
+  app.post('/boards/:boardId/tasks/:taskId/comments/read', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      t = id(r, 'taskId'),
+      input = z
+        .object({ ids: z.array(z.string().uuid()).max(10000) })
+        .strict()
+        .safeParse(r.body);
+    if (!u) return;
+    if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+      return;
+    if (!input.success)
+      return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    await pool.query(
+      `delete from task_comment_unread n using task_comments c, tasks t
+       where n.comment_id=c.id and c.task_id=t.id and t.id=$1
+       and t.board_id=$2 and n.user_id=$3 and c.id=any($4::uuid[])`,
+      [t.data, b.data, u.id, input.data.ids],
+    );
+    return { ok: true };
   });
   app.post('/boards/:boardId/tasks/:taskId/comments', async (r, reply) => {
     const u = await user(r, reply),

@@ -60,10 +60,12 @@ import {
 } from '@tanstack/react-query';
 import {
   Archive,
+  ArrowRight,
   CalendarClock,
   Check,
   ChevronLeft,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   Clock3,
   Columns3,
@@ -75,6 +77,7 @@ import {
   History as HistoryIcon,
   KeyRound,
   Menu as MenuIcon,
+  MessageCircle,
   LogOut,
   Moon,
   MoreHorizontal,
@@ -97,6 +100,8 @@ import '@mantine/core/styles.css';
 import '@mantine/dates/styles.css';
 import 'dayjs/locale/ru';
 import './styles.css';
+import { TeamProgress } from './TeamProgress';
+import { RewardAvatar } from './RewardAvatar';
 type AccountRole = 'superadmin' | 'admin' | 'user';
 type User = {
   id: string;
@@ -143,6 +148,7 @@ function isImageAttachment(attachment: Attachment) {
 }
 type Task = {
   id: string;
+  unreadComments?: number;
   columnId: string;
   title: string;
   description: string;
@@ -521,13 +527,19 @@ function UserMenu({
   logout,
   openArchivedBoards,
   openUsers,
+  openProfile,
 }: {
   user: User;
   logout: () => void;
   openArchivedBoards: () => void;
   openUsers: () => void;
+  openProfile: () => void;
 }) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
+  const profile = useQuery<{ hasAvatar: boolean; frame: string }>({
+    queryKey: ['profile', user.id],
+    queryFn: () => api('/profile'),
+  });
   const themes = [
     { value: 'auto', label: 'Системное', icon: SunMoon },
     { value: 'light', label: 'Светлое', icon: Sun },
@@ -540,12 +552,27 @@ function UserMenu({
           variant="subtle"
           color="gray"
           className="user-menu-trigger"
+          aria-label={personLabel(user)}
+          leftSection={
+            <RewardAvatar
+              name={personLabel(user)}
+              frame={profile.data?.frame}
+              size={32}
+              src={
+                profile.data?.hasAvatar
+                  ? `/api/profile/avatar/${user.id}?v=${profile.dataUpdatedAt}`
+                  : undefined
+              }
+            />
+          }
           rightSection={<ChevronDown size={15} />}
         >
           {personLabel(user)}
         </Button>
       </Menu.Target>
       <Menu.Dropdown>
+        <Menu.Item onClick={openProfile}>Мой профиль</Menu.Item>
+        <Menu.Divider />
         <Menu.Label>Оформление</Menu.Label>
         {themes.map((item) => {
           const Icon = item.icon;
@@ -1410,6 +1437,28 @@ function QuickAdd({
     </form>
   );
 }
+function useCollapsedPreference(key: string) {
+  const [value, setValue] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem(`kanban.collapse.v1.${key}`) === 'true'
+      );
+    } catch {
+      return false;
+    }
+  });
+  const update = (next: boolean) => {
+    setValue(next);
+    try {
+      if (next)
+        window.localStorage.setItem(`kanban.collapse.v1.${key}`, 'true');
+      else window.localStorage.removeItem(`kanban.collapse.v1.${key}`);
+    } catch {
+      /* Collapsing still works when browser storage is unavailable. */
+    }
+  };
+  return [value, update] as const;
+}
 function Card({
   task,
   data,
@@ -1419,6 +1468,7 @@ function Card({
   data: Payload;
   open: () => void;
 }) {
+  const [collapsed, setCollapsed] = useCollapsedPreference(`task.${task.id}`);
   const [start, setStart] = useState<Date | null>(
       task.activeTimer?.startedAt ? new Date(task.activeTimer.startedAt) : null,
     ),
@@ -1453,13 +1503,31 @@ function Card({
   return (
     <div
       ref={setNodeRef}
-      className={`card${isDragging ? ' dragging' : ''}`}
+      className={`card${isDragging ? ' dragging' : ''}${collapsed ? ' card-collapsed' : ''}`}
       style={style}
       data-testid="task-card"
     >
       <button className="card-open" onClick={open}>
         <CardBody task={task} data={data} startedAt={start} />
+        {!!task.unreadComments && (
+          <span
+            className="task-unread"
+            aria-label={`Новые комментарии: ${task.unreadComments}`}
+          >
+            <MessageCircle size={14} aria-hidden="true" /> Новые сообщения ·{' '}
+            {task.unreadComments}
+          </span>
+        )}
       </button>
+      <ActionIcon
+        className="card-collapse"
+        variant="subtle"
+        aria-label={`${collapsed ? 'Развернуть' : 'Свернуть'} задачу «${task.title}»`}
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+      </ActionIcon>
       {!task.archivedAt && (
         <ActionIcon
           ref={setActivatorNodeRef}
@@ -1492,19 +1560,7 @@ function CardBody({
       (assignee ? personLabel(assignee) : undefined) ?? task.assigneeName ?? '',
     authorLabel = personLabel(task.author),
     topic = data.topics?.find((item) => item.id === task.topicId),
-    initials = assigneeLabel
-      .split(/[\s@._-]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join(''),
-    hasMetadata = Boolean(
-      task.dueAt ||
-      task.estimatedMinutes ||
-      startedAt ||
-      assigneeLabel ||
-      task.author,
-    );
+    hasMetadata = Boolean(task.dueAt || task.estimatedMinutes || startedAt);
   return (
     <>
       {Boolean(topic || task.labels?.length) && (
@@ -1535,6 +1591,18 @@ function CardBody({
       {task.description && (
         <span className="card-description">{task.description}</span>
       )}
+      <span className="card-people">
+        <span title={`Автор: ${authorLabel}`}>
+          <UserRound size={13} />
+          <span>{authorLabel}</span>
+        </span>
+        <ArrowRight size={18} className="assignment-arrow" aria-hidden="true" />
+        <span
+          title={`Исполнитель: ${assigneeLabel || 'Не назначен'}${task.assigneeName ? ' · без учётной записи' : ''}`}
+        >
+          <span>{assigneeLabel || 'Не назначен'}</span>
+        </span>
+      </span>
       {hasMetadata && (
         <footer>
           {task.dueAt && (
@@ -1551,22 +1619,6 @@ function CardBody({
             <i className="run">
               <Timer size={13} />{' '}
               {duration((Date.now() - startedAt.getTime()) / 1000)}
-            </i>
-          )}
-          {assigneeLabel && (
-            <i
-              className={`avatar${assignee ? '' : ' text-assignee'}`}
-              title={assignee ? assigneeLabel : `${assigneeLabel} · имя`}
-            >
-              {initials}
-            </i>
-          )}
-          {task.author && (
-            <i
-              className="card-meta card-author"
-              title={`Автор: ${authorLabel}`}
-            >
-              <UserRound size={13} /> {authorLabel}
             </i>
           )}
         </footer>
@@ -1595,6 +1647,8 @@ function CardDragPreview({ task, data }: { task: Task; data: Payload }) {
   );
 }
 function KanbanColumn({
+  collapsed,
+  setCollapsed,
   column,
   data,
   boardId,
@@ -1603,6 +1657,8 @@ function KanbanColumn({
   open,
   refresh,
 }: {
+  collapsed: boolean;
+  setCollapsed: (value: boolean) => void;
   column: Column;
   data: Payload;
   boardId: string;
@@ -1641,13 +1697,26 @@ function KanbanColumn({
   return (
     <article
       ref={setNodeRef}
-      className={`column${isOver ? ' drop-target' : ''}`}
+      className={`column${isOver ? ' drop-target' : ''}${collapsed ? ' column-collapsed' : ''}`}
       data-testid="kanban-column"
     >
       <header>
-        <h2>{column.name}</h2>
+        <div className="column-title-group">
+          <h2>{column.name}</h2>
+          <span className="task-count" aria-label={`Задач: ${tasks.length}`}>
+            {tasks.length}
+          </span>
+        </div>
         <div className="column-header-actions">
-          <span aria-label={`Задач: ${tasks.length}`}>{tasks.length}</span>
+          <ActionIcon
+            id={`column-collapse-${column.id}`}
+            variant="subtle"
+            aria-label={`${collapsed ? 'Развернуть' : 'Свернуть'} колонку ${column.name}`}
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed(!collapsed)}
+          >
+            {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+          </ActionIcon>
           {canManage && (
             <Menu position="bottom-end" withinPortal>
               <Menu.Target>
@@ -1793,16 +1862,109 @@ function KanbanColumn({
           {columnError}
         </small>
       )}
-      <QuickAdd board={boardId} column={column.id} refresh={refresh} />
-      <SortableContext
-        items={tasks.map((task) => task.id)}
-        strategy={verticalListSortingStrategy}
-      >
-        {tasks.map((task) => (
-          <Card task={task} data={data} key={task.id} open={() => open(task)} />
-        ))}
-      </SortableContext>
+      <div className="column-tasks" hidden={collapsed}>
+        <QuickAdd board={boardId} column={column.id} refresh={refresh} />
+        <SortableContext
+          items={tasks.map((task) => task.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {tasks.map((task) => (
+            <Card
+              task={task}
+              data={data}
+              key={task.id}
+              open={() => open(task)}
+            />
+          ))}
+        </SortableContext>
+      </div>
     </article>
+  );
+}
+function BoardColumns(props: {
+  data: Payload;
+  boardId: string;
+  canManage: boolean;
+  visible: (task: Task) => boolean;
+  open: (task: Task) => void;
+  refresh: () => Promise<unknown>;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    const result = new Set<string>();
+    for (const column of props.data.columns) {
+      try {
+        if (
+          localStorage.getItem(`kanban.collapse.v1.column.${column.id}`) ===
+          'true'
+        )
+          result.add(column.id);
+      } catch {
+        /* In-memory preferences remain available. */
+      }
+    }
+    return result;
+  });
+  const update = (ids: string[], value: boolean) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (value) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+    for (const id of ids) {
+      try {
+        const key = `kanban.collapse.v1.column.${id}`;
+        if (value) localStorage.setItem(key, 'true');
+        else localStorage.removeItem(key);
+      } catch {
+        /* In-memory preferences remain available. */
+      }
+    }
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`column-collapse-${ids[0]}`)
+        ?.focus({ preventScroll: true }),
+    );
+  };
+  const render = (column: Column) => (
+    <KanbanColumn
+      {...props}
+      key={column.id}
+      column={column}
+      collapsed={collapsed.has(column.id)}
+      setCollapsed={(value) => update([column.id], value)}
+    />
+  );
+  const hidden = props.data.columns.filter((column) =>
+    collapsed.has(column.id),
+  );
+  return (
+    <div className="board" data-testid="board-scroll">
+      {props.data.columns
+        .filter((column) => !collapsed.has(column.id))
+        .map(render)}
+      {hidden.length > 0 && (
+        <section className="collapsed-columns" aria-label="Свёрнутые колонки">
+          <div className="collapsed-columns-heading">
+            <h2>Свёрнутые колонки</h2>
+            <button
+              type="button"
+              onClick={() =>
+                update(
+                  hidden.map((column) => column.id),
+                  false,
+                )
+              }
+            >
+              Развернуть все
+            </button>
+          </div>
+          <div className="collapsed-columns-list">{hidden.map(render)}</div>
+        </section>
+      )}
+    </div>
   );
 }
 function AddColumn({
@@ -1964,15 +2126,42 @@ function TaskComments({
   onDraftChange: (dirty: boolean) => void;
   onBusyChange: (busy: boolean) => void;
 }) {
+  const queryClient = useQueryClient();
+  const section = useRef<HTMLElement>(null);
   const comments = useQuery<{ comments: TaskComment[] }>({
       queryKey: ['task-comments', boardId, taskId],
       queryFn: () => api(`/boards/${boardId}/tasks/${taskId}/comments`),
+      refetchInterval: 15000,
     }),
     [body, setBody] = useState(''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  useEffect(() => {
+    if (
+      !comments.data ||
+      document.visibilityState !== 'visible' ||
+      !section.current?.getClientRects().length
+    )
+      return;
+    const ids = comments.data.comments.map((comment) => comment.id);
+    if (!ids.length) return;
+    void api(`/boards/${boardId}/tasks/${taskId}/comments/read`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    })
+      .then(() =>
+        queryClient.invalidateQueries({ queryKey: ['board', boardId] }),
+      )
+      .catch(() => {
+        /* Keep unread state until a successful acknowledgement. */
+      });
+  }, [comments.data, comments.dataUpdatedAt, boardId, taskId, queryClient]);
   return (
-    <section className="task-comments" aria-label="Обсуждение задачи">
+    <section
+      ref={section}
+      className="task-comments"
+      aria-label="Обсуждение задачи"
+    >
       <div className="section-heading">
         <div>
           <h2>Обсуждение</h2>
@@ -3426,47 +3615,6 @@ function Settings({
                   <p>Участники видят задачи и могут работать с доской</p>
                 </div>
               </div>
-              {(data.members ?? []).map((member) => {
-                const source = member.accessSource ?? 'board';
-                const canRemoveDirect = source === 'board' || source === 'both';
-                return (
-                  <div className="member-row" key={member.id}>
-                    <div>
-                      <strong>{personLabel(member)}</strong>
-                      <span>
-                        {member.accountRole
-                          ? roleLabel[member.accountRole]
-                          : 'Пользователь'}
-                        {' · '}
-                        {accessSourceLabel[source]}
-                        {member.archivedAt ? ' · отключён' : ''}
-                      </span>
-                    </div>
-                    {canRemoveDirect ? (
-                      <Button
-                        variant="subtle"
-                        color="red"
-                        onClick={() =>
-                          void run(() =>
-                            api(
-                              `/boards/${data.board.id}/members/${member.id}`,
-                              {
-                                method: 'DELETE',
-                              },
-                            ),
-                          )
-                        }
-                      >
-                        Убрать доступ
-                      </Button>
-                    ) : (
-                      <Badge variant="light" color="gray">
-                        Без прямого доступа
-                      </Badge>
-                    )}
-                  </div>
-                );
-              })}
               <form
                 className="settings-form member-create-form"
                 onSubmit={async (event) => {
@@ -3513,6 +3661,47 @@ function Settings({
                   </Text>
                 )}
               </form>
+              {(data.members ?? []).map((member) => {
+                const source = member.accessSource ?? 'board';
+                const canRemoveDirect = source === 'board' || source === 'both';
+                return (
+                  <div className="member-row" key={member.id}>
+                    <div>
+                      <strong>{personLabel(member)}</strong>
+                      <span>
+                        {member.accountRole
+                          ? roleLabel[member.accountRole]
+                          : 'Пользователь'}
+                        {' · '}
+                        {accessSourceLabel[source]}
+                        {member.archivedAt ? ' · отключён' : ''}
+                      </span>
+                    </div>
+                    {canRemoveDirect ? (
+                      <Button
+                        variant="subtle"
+                        color="red"
+                        onClick={() =>
+                          void run(() =>
+                            api(
+                              `/boards/${data.board.id}/members/${member.id}`,
+                              {
+                                method: 'DELETE',
+                              },
+                            ),
+                          )
+                        }
+                      >
+                        Убрать доступ
+                      </Button>
+                    ) : (
+                      <Badge variant="light" color="gray">
+                        Без прямого доступа
+                      </Badge>
+                    )}
+                  </div>
+                );
+              })}
             </Stack>
           </Tabs.Panel>
         )}
@@ -3964,14 +4153,18 @@ function SidebarContent({
         </nav>
       )}
       <div className="sidebar-actions">
-        <CreateBoardPopover
-          departments={departments.filter(
-            (department) => department.canManage !== false,
-          )}
-          initialDepartmentId={selected?.departmentId}
-          afterCreate={boardCreated}
-        />
-        <CreateDepartmentPopover afterCreate={departmentCreated} />
+        {!loading && !error && (
+          <>
+            <CreateBoardPopover
+              departments={departments.filter(
+                (department) => department.canManage !== false,
+              )}
+              initialDepartmentId={selected?.departmentId}
+              afterCreate={boardCreated}
+            />
+            <CreateDepartmentPopover afterCreate={departmentCreated} />
+          </>
+        )}
       </div>
     </div>
   );
@@ -4011,6 +4204,8 @@ function Workspace({
     [settings, setSettings] = useState(false),
     [archiveOpen, setArchiveOpen] = useState(false),
     [usersOpen, setUsersOpen] = useState(false),
+    [profileOpen, setProfileOpen] = useState(false),
+    [rewardsHeader, setRewardsHeader] = useState<HTMLDivElement | null>(null),
     [mobileSidebarOpen, setMobileSidebarOpen] = useState(false),
     [sidebarCollapsed, setSidebarCollapsed] = useState(
       () => window.localStorage.getItem('kanban.sidebar-collapsed') === 'true',
@@ -4048,13 +4243,13 @@ function Workspace({
       setDueFilter('');
       setShowArchived(false);
     },
-    selectBoard = (next: Board) => {
-      const focusBoardTitle = mobileSidebarOpen;
+    selectBoard = (next: Board, closeNavigation = true) => {
+      const focusBoardTitle = closeNavigation && mobileSidebarOpen;
       if (selected?.id !== next.id) resetFilters();
       setSelected(next);
       setOpen(null);
       setMoveError('');
-      setMobileSidebarOpen(false);
+      if (closeNavigation) setMobileSidebarOpen(false);
       const group = groups.find((item) =>
         item.boards.some((boardItem) => boardItem.id === next.id),
       );
@@ -4117,7 +4312,7 @@ function Workspace({
     const current = selected
       ? list.find((boardItem) => boardItem.id === selected.id)
       : undefined;
-    if (!current && list.length) selectBoard(list[0]);
+    if (!current && list.length) selectBoard(list[0], false);
     else if (!current) setSelected(null);
     else if (
       current.name !== selected?.name ||
@@ -4132,7 +4327,7 @@ function Workspace({
         `/boards/${selected!.id}?archived=${showArchived ? 'true' : 'false'}`,
       ),
     enabled: !!selected,
-    refetchInterval: open ? 15000 : false,
+    refetchInterval: 15000,
   });
   const refresh = async () => {
     await q.invalidateQueries({ queryKey: ['board', selected?.id] });
@@ -4383,13 +4578,23 @@ function Workspace({
         <span data-testid="user-email" className="visually-hidden">
           {user.email}
         </span>
+        <div className="header-rewards-slot" ref={setRewardsHeader} />
         <UserMenu
           user={user}
           logout={logout}
           openArchivedBoards={() => setArchiveOpen(true)}
           openUsers={() => setUsersOpen(true)}
+          openProfile={() => setProfileOpen(true)}
         />
       </header>
+      <TeamProgress
+        headerTarget={rewardsHeader}
+        user={user}
+        updateUser={updateCurrentUser}
+        request={api}
+        profileOpen={profileOpen}
+        closeProfile={() => setProfileOpen(false)}
+      />
       <aside className="workspace-sidebar" data-testid="desktop-sidebar">
         <div className="sidebar-toolbar">
           <ActionIcon
@@ -4417,6 +4622,12 @@ function Workspace({
       <MantineDrawer
         opened={mobileSidebarOpen}
         onClose={() => setMobileSidebarOpen(false)}
+        closeOnClickOutside
+        closeOnEscape
+        closeButtonProps={{
+          'aria-label': 'Закрыть меню досок',
+          title: 'Закрыть меню досок',
+        }}
         position="left"
         size="min(320px, 88vw)"
         title="Доски"
@@ -4615,6 +4826,9 @@ function Workspace({
             {moveError && <p role="alert">{moveError}</p>}
             <DndContext
               sensors={sensors}
+              // With a supporting rail, 20% would scroll inside a target column.
+              // Keep automatic scrolling available only near the horizontal edge.
+              autoScroll={{ threshold: { x: 0.06, y: 0.2 } }}
               collisionDetection={taskCollisionDetection}
               onDragStart={({ active }) => setActiveDragId(String(active.id))}
               onDragCancel={() => setActiveDragId(null)}
@@ -4623,20 +4837,15 @@ function Workspace({
                 void moveTask(event);
               }}
             >
-              <div className="board" data-testid="board-scroll">
-                {board.data.columns.map((column) => (
-                  <KanbanColumn
-                    key={column.id}
-                    column={column}
-                    data={board.data}
-                    boardId={selected.id}
-                    canManage={Boolean(canManage)}
-                    visible={visible}
-                    open={setOpen}
-                    refresh={refresh}
-                  />
-                ))}
-              </div>
+              <BoardColumns
+                key={selected.id}
+                data={board.data}
+                boardId={selected.id}
+                canManage={Boolean(canManage)}
+                visible={visible}
+                open={setOpen}
+                refresh={refresh}
+              />
               {createPortal(
                 <DragOverlay dropAnimation={null}>
                   {activeDragTask ? (
