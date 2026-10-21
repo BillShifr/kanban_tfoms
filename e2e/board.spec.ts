@@ -446,6 +446,28 @@ test.describe('core board workflow', () => {
     ).toBeVisible();
   });
 
+  test('closes the mobile drawer with its close control and Escape', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'mobile', 'Mobile-only navigation');
+    await signIn(page);
+
+    let drawer = await openNavigation(page);
+    const closeButton = drawer.getByRole('button', {
+      name: 'Закрыть меню досок',
+    });
+    await expect(closeButton).toBeVisible();
+    const closeButtonBox = await closeButton.boundingBox();
+    expect(closeButtonBox?.width).toBeGreaterThanOrEqual(44);
+    expect(closeButtonBox?.height).toBeGreaterThanOrEqual(44);
+    await closeButton.click();
+    await expect(drawer).toBeHidden();
+
+    drawer = await openNavigation(page);
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+  });
+
   test('keeps responsive overflow inside the board', async ({ page }) => {
     await signIn(page);
     await createBoardForTest(page);

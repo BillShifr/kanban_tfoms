@@ -4622,6 +4622,12 @@ function Workspace({
       <MantineDrawer
         opened={mobileSidebarOpen}
         onClose={() => setMobileSidebarOpen(false)}
+        closeOnClickOutside
+        closeOnEscape
+        closeButtonProps={{
+          'aria-label': 'Закрыть меню досок',
+          title: 'Закрыть меню досок',
+        }}
         position="left"
         size="min(320px, 88vw)"
         title="Доски"

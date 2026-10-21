@@ -2968,6 +2968,33 @@ a {
     padding: 4px 14px 18px;
     overflow-y: auto;
   }
+  .mobile-sidebar .mantine-Drawer-header {
+    min-height: 60px;
+    padding: 8px 10px 8px 16px;
+    border-bottom: 1px solid var(--app-border);
+  }
+  .mobile-sidebar .mantine-Drawer-title {
+    color: var(--app-text);
+    font-size: 16px;
+    font-weight: 750;
+  }
+  .mobile-sidebar .mantine-Drawer-close {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    color: var(--app-text);
+  }
+  .mobile-sidebar .mantine-Drawer-close:hover,
+  .mobile-sidebar .mantine-Drawer-close:focus-visible {
+    border-color: var(--app-border-strong);
+    background: var(--app-canvas);
+  }
+  .mobile-sidebar .mantine-Drawer-close:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--app-accent) 28%, transparent);
+    outline-offset: 1px;
+  }
   .mobile-sidebar-body .sidebar-content {
     min-height: 100%;
   }
