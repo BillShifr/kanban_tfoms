@@ -532,12 +532,14 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
         })
         .toBe(true);
     }
-    await page
-      .getByRole('button', {
-        name: `Свернуть колонку ${detail.columns[0].name}`,
-        exact: true,
-      })
-      .click();
+    const firstColumnToggle = page.getByRole('button', {
+      name: `Свернуть колонку ${detail.columns[0].name}`,
+      exact: true,
+    });
+    // dnd-kit briefly suppresses the click immediately following a pointer
+    // drop. Exercise the keyboard path here instead of racing that guard.
+    await firstColumnToggle.focus();
+    await page.keyboard.press('Enter');
     const folded = page.getByRole('region', { name: 'Свёрнутые колонки' });
     await expect(folded).toHaveCount(1);
     await expect(folded.locator('.column')).toHaveCount(2);
