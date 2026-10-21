@@ -751,9 +751,16 @@ a {
   text-transform: uppercase;
 }
 .team-dialog-header {
+  flex: 0 0 auto;
   background: var(--app-surface);
   color: var(--app-text);
   padding: 24px;
+}
+.team-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 18px;
 }
 .team-dialog-title {
   font-family: 'Manrope', sans-serif;
@@ -764,7 +771,26 @@ a {
   color: var(--app-soft);
 }
 .team-dialog .mantine-Modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--app-border) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
   padding: 0 24px 24px;
+}
+.team-dialog .mantine-Modal-body::-webkit-scrollbar {
+  width: 10px;
+}
+.team-dialog .mantine-Modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.team-dialog .mantine-Modal-body::-webkit-scrollbar-thumb {
+  background: var(--app-border);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
 }
 .team-rail .mantine-SegmentedControl-root,
 .team-dialog .mantine-SegmentedControl-root {
