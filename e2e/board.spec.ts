@@ -1231,6 +1231,7 @@ test.describe('core board workflow', () => {
 
     const backlog = backlogColumn(page);
     const inProgress = columnByName(page, 'В работе');
+    const board = page.getByTestId('board-scroll');
     const card = backlog.getByTestId('task-card').filter({
       has: page.getByText(title, { exact: true }),
     });
@@ -1240,7 +1241,10 @@ test.describe('core board workflow', () => {
       }),
       cardBox = await card.boundingBox(),
       handleBox = await handle.boundingBox(),
-      targetBox = await inProgress.boundingBox();
+      targetBox = await inProgress.boundingBox(),
+      initialBoardScrollLeft = await board.evaluate(
+        (element) => element.scrollLeft,
+      );
     expect(cardBox).not.toBeNull();
     expect(handleBox).not.toBeNull();
     expect(targetBox).not.toBeNull();
@@ -1269,7 +1273,10 @@ test.describe('core board workflow', () => {
     });
     const lefts = samples.map(({ left }) => left),
       expectedLeft = pointerX - grabOffsetX,
-      placeholderBox = await card.boundingBox();
+      placeholderBox = await card.boundingBox(),
+      draggedBoardScrollLeft = await board.evaluate(
+        (element) => element.scrollLeft,
+      );
     expect(Math.max(...lefts) - Math.min(...lefts)).toBeLessThanOrEqual(1.5);
     for (const rect of samples) {
       expect(Math.abs(rect.left - expectedLeft)).toBeLessThanOrEqual(4);
@@ -1278,7 +1285,16 @@ test.describe('core board workflow', () => {
         targetBox!.x + targetBox!.width + 4,
       );
     }
-    expect(Math.abs(placeholderBox!.x - cardBox!.x)).toBeLessThanOrEqual(1);
+    // DndContext may horizontally auto-scroll the board while the pointer is
+    // near its edge. Compare positions in the board's scroll coordinate space,
+    // not viewport coordinates that move by the current scrollLeft.
+    expect(
+      Math.abs(
+        placeholderBox!.x +
+          draggedBoardScrollLeft -
+          (cardBox!.x + initialBoardScrollLeft),
+      ),
+    ).toBeLessThanOrEqual(1);
 
     await page.mouse.move(targetBox!.x + 8, targetBox!.y + 110, { steps: 8 });
     await expect(inProgress).toHaveClass(/drop-target/);
