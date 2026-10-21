@@ -192,8 +192,12 @@ database('PostgreSQL invariants', () => {
             [legacyColumn, legacyBoard],
           );
           await legacyClient.query(
-            `insert into tasks(id,board_id,column_id,title,author_id,position)
-           values ($1,$2,$3,'Legacy task',$4,1)`,
+            `insert into tasks(
+              id,board_id,column_id,title,author_id,assignee_id,position,created_at,completed_at
+            ) values (
+              $1,$2,$3,'Legacy task',$4,$4,1,
+              '2026-09-10T08:00:00Z','2026-09-12T09:30:00Z'
+            )`,
             [legacyTask, legacyBoard, legacyColumn, legacyUser],
           );
           if (cutoff === '0018_') {
@@ -214,15 +218,44 @@ database('PostgreSQL invariants', () => {
           ['Legacy task'],
         );
         expect(upgraded.rows).toEqual([{ title: 'Legacy task' }]);
+        const contributions = await legacyPool.query<{
+          kind: string;
+          points: number;
+          createdAt: Date;
+        }>(
+          `select kind,points,created_at as "createdAt"
+           from contribution_events order by kind`,
+        );
         expect(
-          (await legacyPool.query('select * from contribution_events')).rows,
-        ).toHaveLength(cutoff >= '0016_' ? 1 : 0);
+          contributions.rows.map(({ kind, points }) => ({ kind, points })),
+        ).toEqual([
+          { kind: 'completed', points: 10 },
+          { kind: 'created', points: 2 },
+        ]);
+        if (cutoff <= '0015_') {
+          expect(
+            contributions.rows.map(({ kind, createdAt }) => ({
+              kind,
+              createdAt: createdAt.toISOString(),
+            })),
+          ).toEqual([
+            {
+              kind: 'completed',
+              createdAt: '2026-09-12T09:30:00.000Z',
+            },
+            { kind: 'created', createdAt: '2026-09-10T08:00:00.000Z' },
+          ]);
+        }
         expect(
           (await legacyPool.query('select * from user_profiles')).rows,
         ).toEqual([]);
         expect(
-          (await legacyPool.query('select code from earned_achievements')).rows,
-        ).toEqual(cutoff >= '0016_' ? [{ code: 'initiative' }] : []);
+          (
+            await legacyPool.query(
+              'select code from earned_achievements order by code',
+            )
+          ).rows,
+        ).toEqual([{ code: 'initiative' }, { code: 'result' }]);
         expect(
           (await legacyPool.query('select * from task_comment_unread')).rows,
         ).toEqual([]);
