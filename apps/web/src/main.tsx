@@ -3615,47 +3615,6 @@ function Settings({
                   <p>Участники видят задачи и могут работать с доской</p>
                 </div>
               </div>
-              {(data.members ?? []).map((member) => {
-                const source = member.accessSource ?? 'board';
-                const canRemoveDirect = source === 'board' || source === 'both';
-                return (
-                  <div className="member-row" key={member.id}>
-                    <div>
-                      <strong>{personLabel(member)}</strong>
-                      <span>
-                        {member.accountRole
-                          ? roleLabel[member.accountRole]
-                          : 'Пользователь'}
-                        {' · '}
-                        {accessSourceLabel[source]}
-                        {member.archivedAt ? ' · отключён' : ''}
-                      </span>
-                    </div>
-                    {canRemoveDirect ? (
-                      <Button
-                        variant="subtle"
-                        color="red"
-                        onClick={() =>
-                          void run(() =>
-                            api(
-                              `/boards/${data.board.id}/members/${member.id}`,
-                              {
-                                method: 'DELETE',
-                              },
-                            ),
-                          )
-                        }
-                      >
-                        Убрать доступ
-                      </Button>
-                    ) : (
-                      <Badge variant="light" color="gray">
-                        Без прямого доступа
-                      </Badge>
-                    )}
-                  </div>
-                );
-              })}
               <form
                 className="settings-form member-create-form"
                 onSubmit={async (event) => {
@@ -3702,6 +3661,47 @@ function Settings({
                   </Text>
                 )}
               </form>
+              {(data.members ?? []).map((member) => {
+                const source = member.accessSource ?? 'board';
+                const canRemoveDirect = source === 'board' || source === 'both';
+                return (
+                  <div className="member-row" key={member.id}>
+                    <div>
+                      <strong>{personLabel(member)}</strong>
+                      <span>
+                        {member.accountRole
+                          ? roleLabel[member.accountRole]
+                          : 'Пользователь'}
+                        {' · '}
+                        {accessSourceLabel[source]}
+                        {member.archivedAt ? ' · отключён' : ''}
+                      </span>
+                    </div>
+                    {canRemoveDirect ? (
+                      <Button
+                        variant="subtle"
+                        color="red"
+                        onClick={() =>
+                          void run(() =>
+                            api(
+                              `/boards/${data.board.id}/members/${member.id}`,
+                              {
+                                method: 'DELETE',
+                              },
+                            ),
+                          )
+                        }
+                      >
+                        Убрать доступ
+                      </Button>
+                    ) : (
+                      <Badge variant="light" color="gray">
+                        Без прямого доступа
+                      </Badge>
+                    )}
+                  </div>
+                );
+              })}
             </Stack>
           </Tabs.Panel>
         )}

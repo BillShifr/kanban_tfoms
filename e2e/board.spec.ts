@@ -1892,12 +1892,13 @@ test.describe('core board workflow', () => {
     const memberSelect = page.getByRole('textbox', {
       name: 'Добавить пользователя',
     });
-    await memberSelect.fill(memberEmail);
-    await expect(
-      page.getByRole('option', { name: memberEmail, exact: true }),
-    ).toBeVisible();
-    await memberSelect.press('ArrowDown');
-    await memberSelect.press('Enter');
+    await memberSelect.click();
+    const memberOption = page.getByRole('option', {
+      name: memberEmail,
+      exact: true,
+    });
+    await expect(memberOption).toBeVisible();
+    await memberOption.click();
     await page.getByRole('button', { name: 'Добавить на доску' }).click();
     await expect(page.getByText(memberEmail, { exact: true })).toBeVisible();
     await expect(
