@@ -334,6 +334,12 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     ownTaskId = (await own.json()).task.id;
     await profile.getByRole('button', { name: 'Сохранить профиль' }).click();
     await expect(page.locator('.points-celebration')).toContainText('+2');
+    await expect(page.locator('.points-celebration')).toContainText('балла');
+    expect(
+      await page
+        .locator('.points-stage')
+        .evaluate((el) => getComputedStyle(el).pointerEvents),
+    ).toBe('none');
     expect(
       await page
         .locator('.points-celebration')
@@ -500,9 +506,13 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       expect(targetBox).not.toBeNull();
       await page.mouse.move(sourceBox!.x + 8, sourceBox!.y + 8);
       await page.mouse.down();
-      await page.mouse.move(targetBox!.x + 30, targetBox!.y + 90, {
-        steps: 15,
-      });
+      await page.mouse.move(
+        targetBox!.x + 30,
+        targetBox!.y + targetBox!.height / 2,
+        {
+          steps: 15,
+        },
+      );
       await page.mouse.up();
       await expect
         .poll(async () => {
@@ -515,6 +525,56 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
         })
         .toBe(true);
     }
+    await page
+      .getByRole('button', {
+        name: `Свернуть колонку ${detail.columns[0].name}`,
+        exact: true,
+      })
+      .click();
+    const folded = page.getByRole('region', { name: 'Свёрнутые колонки' });
+    await expect(folded).toHaveCount(1);
+    await expect(folded.locator('.column')).toHaveCount(2);
+    expect(
+      await folded.evaluate((el) => el.getBoundingClientRect().height),
+    ).toBeLessThan(300);
+    await page.reload();
+    await expect(folded.locator('.column')).toHaveCount(2);
+    await folded
+      .getByRole('button', { name: 'Развернуть все', exact: true })
+      .click();
+    await expect(folded).toHaveCount(0);
+    await page.locator('.card-open').filter({ hasText: title }).click();
+    await page
+      .getByRole('button', { name: 'Другие действия', exact: true })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'Удалить задачу', exact: true })
+      .click();
+    await page
+      .getByRole('button', { name: 'Удалить навсегда', exact: true })
+      .click();
+    await expect(
+      page.getByRole('dialog', { name: 'Удалить задачу?' }),
+    ).toBeHidden();
+    for (const scope of ['visible', 'global']) {
+      const afterDeletion = await (
+        await page.request.get(`/api/progress?scope=${scope}`)
+      ).json();
+      expect(afterDeletion.me).toMatchObject({
+        points: 0,
+        monthCreated: 0,
+        monthCompleted: 0,
+      });
+      expect(afterDeletion.recentEvents).toEqual([]);
+    }
+    await expect(page.locator('.points-celebration')).toHaveCount(0);
+    ownTaskId = undefined;
+    if (isMobile)
+      await expect(page.locator('.team-mobile-bar')).toContainText(
+        '0 баллов за месяц',
+      );
+    else
+      await expect(page.locator('.team-score-number strong')).toHaveText('0');
   } finally {
     if (ownTaskId)
       await request.delete(`/api/boards/${board.id}/tasks/${ownTaskId}`);

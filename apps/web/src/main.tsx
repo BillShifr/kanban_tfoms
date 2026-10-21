@@ -1647,6 +1647,8 @@ function CardDragPreview({ task, data }: { task: Task; data: Payload }) {
   );
 }
 function KanbanColumn({
+  collapsed,
+  setCollapsed,
   column,
   data,
   boardId,
@@ -1655,6 +1657,8 @@ function KanbanColumn({
   open,
   refresh,
 }: {
+  collapsed: boolean;
+  setCollapsed: (value: boolean) => void;
   column: Column;
   data: Payload;
   boardId: string;
@@ -1663,9 +1667,6 @@ function KanbanColumn({
   open: (task: Task) => void;
   refresh: () => Promise<unknown>;
 }) {
-  const [collapsed, setCollapsed] = useCollapsedPreference(
-    `column.${column.id}`,
-  );
   const { isOver, setNodeRef } = useDroppable({
     id: `column:${column.id}`,
     data: { type: 'column', columnId: column.id },
@@ -1708,6 +1709,7 @@ function KanbanColumn({
         </div>
         <div className="column-header-actions">
           <ActionIcon
+            id={`column-collapse-${column.id}`}
             variant="subtle"
             aria-label={`${collapsed ? 'Развернуть' : 'Свернуть'} колонку ${column.name}`}
             aria-expanded={!collapsed}
@@ -1860,12 +1862,6 @@ function KanbanColumn({
           {columnError}
         </small>
       )}
-      {collapsed && (
-        <p className="collapsed-column-hint">
-          {tasks.length} задач скрыто. Перетащите задачу сюда или разверните
-          колонку.
-        </p>
-      )}
       <div className="column-tasks" hidden={collapsed}>
         <QuickAdd board={boardId} column={column.id} refresh={refresh} />
         <SortableContext
@@ -1883,6 +1879,92 @@ function KanbanColumn({
         </SortableContext>
       </div>
     </article>
+  );
+}
+function BoardColumns(props: {
+  data: Payload;
+  boardId: string;
+  canManage: boolean;
+  visible: (task: Task) => boolean;
+  open: (task: Task) => void;
+  refresh: () => Promise<unknown>;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    const result = new Set<string>();
+    for (const column of props.data.columns) {
+      try {
+        if (
+          localStorage.getItem(`kanban.collapse.v1.column.${column.id}`) ===
+          'true'
+        )
+          result.add(column.id);
+      } catch {
+        /* In-memory preferences remain available. */
+      }
+    }
+    return result;
+  });
+  const update = (ids: string[], value: boolean) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (value) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+    for (const id of ids) {
+      try {
+        const key = `kanban.collapse.v1.column.${id}`;
+        if (value) localStorage.setItem(key, 'true');
+        else localStorage.removeItem(key);
+      } catch {
+        /* In-memory preferences remain available. */
+      }
+    }
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`column-collapse-${ids[0]}`)
+        ?.focus({ preventScroll: true }),
+    );
+  };
+  const render = (column: Column) => (
+    <KanbanColumn
+      {...props}
+      key={column.id}
+      column={column}
+      collapsed={collapsed.has(column.id)}
+      setCollapsed={(value) => update([column.id], value)}
+    />
+  );
+  const hidden = props.data.columns.filter((column) =>
+    collapsed.has(column.id),
+  );
+  return (
+    <div className="board" data-testid="board-scroll">
+      {props.data.columns
+        .filter((column) => !collapsed.has(column.id))
+        .map(render)}
+      {hidden.length > 0 && (
+        <section className="collapsed-columns" aria-label="Свёрнутые колонки">
+          <div className="collapsed-columns-heading">
+            <h2>Свёрнутые колонки</h2>
+            <button
+              type="button"
+              onClick={() =>
+                update(
+                  hidden.map((column) => column.id),
+                  false,
+                )
+              }
+            >
+              Развернуть все
+            </button>
+          </div>
+          <div className="collapsed-columns-list">{hidden.map(render)}</div>
+        </section>
+      )}
+    </div>
   );
 }
 function AddColumn({
@@ -4749,20 +4831,15 @@ function Workspace({
                 void moveTask(event);
               }}
             >
-              <div className="board" data-testid="board-scroll">
-                {board.data.columns.map((column) => (
-                  <KanbanColumn
-                    key={column.id}
-                    column={column}
-                    data={board.data}
-                    boardId={selected.id}
-                    canManage={Boolean(canManage)}
-                    visible={visible}
-                    open={setOpen}
-                    refresh={refresh}
-                  />
-                ))}
-              </div>
+              <BoardColumns
+                key={selected.id}
+                data={board.data}
+                boardId={selected.id}
+                canManage={Boolean(canManage)}
+                visible={visible}
+                open={setOpen}
+                refresh={refresh}
+              />
               {createPortal(
                 <DragOverlay dropAnimation={null}>
                   {activeDragTask ? (
