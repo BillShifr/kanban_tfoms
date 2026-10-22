@@ -3035,17 +3035,64 @@ a {
   font-size: 12px;
 }
 .admin-user-create {
-  padding: 16px;
+  min-width: 0;
+  padding: 18px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: end;
-  gap: 12px;
+  gap: 18px;
   border: 1px solid var(--app-border);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--app-canvas);
 }
-.admin-user-create .section-heading {
+.admin-user-create-section {
+  min-width: 0;
+  padding-top: 16px;
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--app-border);
+}
+.admin-user-create-section-heading {
+  display: grid;
+  gap: 2px;
+}
+.admin-user-create-section-heading strong {
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 750;
+}
+.admin-user-create-section-heading span,
+.admin-user-create-actions > span {
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.admin-user-identity-grid,
+.admin-user-security-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+.admin-user-email {
   grid-column: 1 / -1;
+}
+.admin-user-security-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.52fr);
+}
+.admin-user-security-grid.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.admin-user-create-actions {
+  min-width: 0;
+  padding-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--app-border);
+}
+.admin-user-create-actions .mantine-Button-root {
+  flex: 0 0 auto;
 }
 .responsibility-groups {
   display: grid;
@@ -3053,9 +3100,9 @@ a {
 }
 .responsibility-intro {
   padding: 18px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
-  justify-content: space-between;
   gap: 18px;
   border: 1px solid color-mix(in srgb, var(--app-accent) 34%, var(--app-border));
   border-radius: 14px;
@@ -3069,6 +3116,11 @@ a {
 }
 .responsibility-intro > div {
   min-width: 0;
+}
+.responsibility-intro > .mantine-Button-root {
+  max-width: 100%;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .responsibility-intro h2 {
   margin: 2px 0 4px;
@@ -3315,8 +3367,13 @@ a {
 }
 .admin-user-summary > div:first-child {
   min-width: 0;
+  flex: 1 1 160px;
   display: grid;
   gap: 2px;
+}
+.admin-user-summary > .mantine-Group-root {
+  min-width: 0;
+  flex: 0 1 auto;
 }
 .admin-user-summary strong {
   overflow: hidden;
@@ -3591,11 +3648,28 @@ a {
     grid-template-columns: 1fr;
   }
   .admin-user-create {
+    padding: 16px;
+  }
+  .admin-user-identity-grid,
+  .admin-user-security-grid {
     grid-template-columns: 1fr;
+  }
+  .admin-user-email {
+    grid-column: auto;
+  }
+  .admin-user-create-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .admin-user-create-actions .mantine-Button-root {
+    width: 100%;
   }
   .responsibility-intro {
     align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+  .responsibility-intro > .mantine-Button-root {
+    width: 100%;
   }
   .responsibility-grid {
     grid-template-columns: 1fr;

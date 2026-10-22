@@ -715,10 +715,30 @@ test.describe('core board workflow', () => {
 
     await page.getByRole('button', { name: email }).click();
     await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
+    const groupIntro = page.locator('.responsibility-intro'),
+      createForm = page.locator('.admin-user-create');
+    await expect(
+      groupIntro.getByRole('button', { name: 'Создать группу' }),
+    ).toBeVisible();
+    expect(
+      await groupIntro.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    await expect(
+      createForm.getByText('Данные пользователя', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      createForm.getByText('Вход и роль', { exact: true }),
+    ).toBeVisible();
+    expect(
+      await createForm.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
     await expect(page.getByText(adminEmail, { exact: true })).toBeVisible();
     await expect(page.getByText(userEmail, { exact: true })).toBeVisible();
     const generatedEmail = uniqueEmail('generated-user'),
-      createForm = page.locator('.admin-user-create'),
       createPassword = createForm.getByLabel('Пароль для входа');
     await createForm.getByLabel('Email').fill(generatedEmail);
     await createForm
@@ -761,6 +781,23 @@ test.describe('core board workflow', () => {
     await expect(
       userRow.getByText('Петров Илья', { exact: true }),
     ).toBeVisible();
+    expect(
+      await userRow.evaluate((row, accountEmail) => {
+        const access = Array.from(row.querySelectorAll('button')).find(
+            (button) => button.textContent?.trim() === 'Доступ',
+          ),
+          role = Array.from(row.querySelectorAll('[aria-label]')).find(
+            (element) =>
+              element.getAttribute('aria-label') === `Роль ${accountEmail}`,
+          );
+        return Boolean(
+          access &&
+          role &&
+          access.compareDocumentPosition(role) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      }, userEmail),
+    ).toBe(true);
 
     await page
       .getByRole('button', { name: `Изменить ФИО ${userEmail}` })
