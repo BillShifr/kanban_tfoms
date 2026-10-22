@@ -3047,6 +3047,253 @@ a {
 .admin-user-create .section-heading {
   grid-column: 1 / -1;
 }
+.responsibility-groups {
+  display: grid;
+  gap: 14px;
+}
+.responsibility-intro {
+  padding: 18px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 34%, var(--app-border));
+  border-radius: 14px;
+  background:
+    radial-gradient(
+      circle at 92% 12%,
+      color-mix(in srgb, var(--app-accent) 16%, transparent),
+      transparent 32%
+    ),
+    var(--app-canvas);
+}
+.responsibility-intro > div {
+  min-width: 0;
+}
+.responsibility-intro h2 {
+  margin: 2px 0 4px;
+  font-size: 20px;
+}
+.responsibility-intro p {
+  max-width: 500px;
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.responsibility-empty,
+.manager-scope-note {
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px dashed var(--app-border);
+  border-radius: 12px;
+  color: var(--app-muted);
+  background: var(--app-canvas);
+}
+.responsibility-empty > div,
+.manager-scope-note > div {
+  display: grid;
+  gap: 2px;
+}
+.responsibility-empty strong,
+.manager-scope-note strong {
+  color: var(--app-text);
+  font-size: 14px;
+}
+.responsibility-empty span,
+.manager-scope-note span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+.manager-scope-note {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--app-accent) 32%, var(--app-border));
+  background: color-mix(in srgb, var(--app-accent-soft) 42%, var(--app-canvas));
+}
+.responsibility-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.responsibility-card {
+  min-width: 0;
+  padding: 14px;
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 13px;
+  background: var(--app-canvas);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--app-text) 5%, transparent);
+}
+.responsibility-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.responsibility-card-heading > div {
+  min-width: 0;
+}
+.responsibility-card-heading .mantine-Badge-root,
+.responsibility-member-list .mantine-Badge-root {
+  max-width: 100%;
+}
+.responsibility-card-heading .mantine-Badge-label,
+.responsibility-member-list .mantine-Badge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.responsibility-card h3 {
+  margin: 7px 0 0;
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.responsibility-owner {
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: var(--app-surface);
+}
+.responsibility-owner > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.responsibility-owner span,
+.responsibility-owner small,
+.responsibility-members > span {
+  color: var(--app-muted);
+  font-size: 11px;
+}
+.responsibility-owner strong,
+.responsibility-owner small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.responsibility-owner strong {
+  font-size: 13px;
+}
+.responsibility-members {
+  display: grid;
+  gap: 7px;
+}
+.responsibility-member-list {
+  min-width: 0;
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.responsibility-member-list .mantine-Badge-root {
+  flex: 0 1 auto;
+}
+.responsibility-editor {
+  display: grid;
+  gap: 14px;
+}
+.mantine-Combobox-dropdown {
+  max-width: calc(100vw - 24px);
+}
+.mantine-Combobox-option {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.responsibility-editor-note {
+  padding: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--app-accent-soft) 48%, var(--app-canvas));
+  color: var(--app-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.password-composer {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.password-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.password-tools .mantine-Button-root {
+  min-height: 34px;
+}
+.password-copy-status {
+  min-height: 16px;
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.credential-receipt {
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 38%, var(--app-border));
+  border-radius: 12px;
+  background: color-mix(
+    in srgb,
+    var(--app-accent-soft) 48%,
+    var(--app-surface)
+  );
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--app-accent) 72%, #7dd3c7);
+}
+.credential-receipt-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.credential-receipt-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.credential-receipt-heading strong {
+  font-size: 14px;
+}
+.credential-receipt-heading span,
+.credential-email {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+.credential-email {
+  overflow-wrap: anywhere;
+}
+.credential-secret {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.credential-secret code {
+  min-width: 0;
+  flex: 1;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
 .admin-user-list {
   display: grid;
   gap: 10px;
@@ -3345,6 +3592,22 @@ a {
   }
   .admin-user-create {
     grid-template-columns: 1fr;
+  }
+  .responsibility-intro {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .responsibility-grid {
+    grid-template-columns: 1fr;
+  }
+  .password-tools,
+  .credential-secret {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .password-tools .mantine-Button-root,
+  .credential-secret .mantine-Button-root {
+    width: 100%;
   }
   .admin-user-summary {
     align-items: stretch;

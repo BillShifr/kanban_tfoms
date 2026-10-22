@@ -27,6 +27,8 @@ import {
   departments,
   departmentMembers,
   labels,
+  responsibilityGroupMembers,
+  responsibilityGroups,
   sessions,
   taskLabels,
   taskEvents,
@@ -46,6 +48,7 @@ import {
 import {
   canChangeAccountRole,
   canManageAccount,
+  canOpenUserAdministration,
   isElevated,
   type AccountRole,
 } from './policy.js';
@@ -101,7 +104,7 @@ const credentials = z
     }
     return parsed;
   });
-const accountRole = z.enum(['superadmin', 'admin', 'user']);
+const accountRole = z.enum(['superadmin', 'admin', 'manager', 'user']);
 const adminUserCreateInput = z
   .object({
     email: z.string().trim().email().max(254),
@@ -132,6 +135,18 @@ const accessInput = z
       .transform((v) => [...new Set(v)]),
   })
   .strict();
+const responsibilityGroupInput = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    departmentId: z.string().uuid(),
+    responsibleId: z.string().uuid(),
+    memberIds: z
+      .array(z.string().uuid())
+      .max(500)
+      .transform((value) => [...new Set(value)]),
+  })
+  .strict()
+  .refine((value) => !value.memberIds.includes(value.responsibleId));
 const assigneeName = z
   .string()
   .trim()
@@ -308,6 +323,30 @@ async function assignedToDepartment(departmentId: string, user: User) {
         .limit(1)
     )[0],
   );
+}
+
+async function managerCanManageUser(managerId: string, targetId: string) {
+  const result = await pool.query<{ exists: boolean }>(
+    `select exists(
+       select 1
+       from responsibility_groups rg
+       join responsibility_group_members rgm on rgm.group_id=rg.id
+       join users target on target.id=rgm.user_id
+       where rg.responsible_id=$1 and rgm.user_id=$2
+         and target.archived_at is null and target.role <> 'superadmin'
+     ) as exists`,
+    [managerId, targetId],
+  );
+  return result.rows[0]?.exists ?? false;
+}
+
+async function managerDepartmentIds(managerId: string) {
+  return (
+    await db
+      .select({ departmentId: responsibilityGroups.departmentId })
+      .from(responsibilityGroups)
+      .where(eq(responsibilityGroups.responsibleId, managerId))
+  ).map((item) => item.departmentId);
 }
 
 async function boardOr404(
@@ -831,7 +870,7 @@ export async function buildApp() {
         await tx
           .insert(departments)
           .values({ id: department.id, name: department.name });
-        if (u.role === 'user')
+        if (!isElevated(u.role))
           await tx
             .insert(departmentMembers)
             .values({ departmentId: department.id, userId: u.id });
@@ -899,12 +938,22 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (existingBoard) return 'DEPARTMENT_HAS_BOARDS';
+      const responsibilityGroup = (
+        await tx
+          .select({ id: responsibilityGroups.id })
+          .from(responsibilityGroups)
+          .where(eq(responsibilityGroups.departmentId, d.data))
+          .limit(1)
+      )[0];
+      if (responsibilityGroup) return 'DEPARTMENT_HAS_RESPONSIBILITY_GROUPS';
       await tx.delete(departments).where(eq(departments.id, d.data));
       return 'OK';
     });
     if (result === 'DEPARTMENT_NOT_FOUND')
       return reply.code(404).send({ code: result });
     if (result === 'DEPARTMENT_HAS_BOARDS')
+      return reply.code(409).send({ code: result });
+    if (result === 'DEPARTMENT_HAS_RESPONSIBILITY_GROUPS')
       return reply.code(409).send({ code: result });
     return reply.code(204).send();
   });
@@ -1855,6 +1904,320 @@ export async function buildApp() {
         .orderBy(timeEntries.startedAt),
     };
   });
+  app.get('/admin/groups', async (r, reply) => {
+    const u = await user(r, reply);
+    if (!u) return;
+    if (u.role !== 'superadmin' && u.role !== 'manager')
+      return reply.code(403).send({ code: 'FORBIDDEN' });
+    const groups = (
+      await pool.query<{
+        id: string;
+        name: string;
+        departmentId: string;
+        departmentName: string;
+        responsibleId: string;
+        responsibleEmail: string;
+        responsibleFirstName: string | null;
+        responsibleLastName: string | null;
+        createdAt: Date;
+      }>(
+        `select rg.id,rg.name,rg.department_id as "departmentId",
+                d.name as "departmentName",rg.responsible_id as "responsibleId",
+                u.email as "responsibleEmail",u.first_name as "responsibleFirstName",
+                u.last_name as "responsibleLastName",rg.created_at as "createdAt"
+         from responsibility_groups rg
+         join departments d on d.id=rg.department_id
+         join users u on u.id=rg.responsible_id
+         where ($1::boolean or rg.responsible_id=$2)
+         order by d.name,rg.name,rg.id`,
+        [u.role === 'superadmin', u.id],
+      )
+    ).rows;
+    const groupIds = groups.map((group) => group.id);
+    const members = groupIds.length
+      ? (
+          await pool.query<{
+            groupId: string;
+            id: string;
+            email: string;
+            role: AccountRole;
+            firstName: string | null;
+            lastName: string | null;
+            archivedAt: Date | null;
+          }>(
+            `select rgm.group_id as "groupId",u.id,u.email,u.role,
+                    u.first_name as "firstName",u.last_name as "lastName",
+                    u.archived_at as "archivedAt"
+             from responsibility_group_members rgm
+             join users u on u.id=rgm.user_id
+             where rgm.group_id=any($1::uuid[])
+             order by u.last_name nulls last,u.first_name nulls last,u.email,u.id`,
+            [groupIds],
+          )
+        ).rows
+      : [];
+    return {
+      groups: groups.map((group) => ({
+        ...group,
+        responsible: {
+          id: group.responsibleId,
+          email: group.responsibleEmail,
+          firstName: group.responsibleFirstName,
+          lastName: group.responsibleLastName,
+          role: 'manager' as const,
+        },
+        members: members
+          .filter((member) => member.groupId === group.id)
+          .map((member) => ({
+            id: member.id,
+            email: member.email,
+            role: member.role,
+            firstName: member.firstName,
+            lastName: member.lastName,
+            archivedAt: member.archivedAt,
+          })),
+      })),
+    };
+  });
+
+  app.post('/admin/groups', async (r, reply) => {
+    const u = await user(r, reply),
+      p = responsibilityGroupInput.safeParse(r.body);
+    if (!u) return;
+    if (u.role !== 'superadmin')
+      return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const groupId = crypto.randomUUID();
+    try {
+      const result = await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-responsibility-groups'))`,
+        );
+        const department = (
+          await tx
+            .select({ id: departments.id })
+            .from(departments)
+            .where(eq(departments.id, p.data.departmentId))
+            .limit(1)
+        )[0];
+        const candidates = await tx
+          .select({ id: users.id, role: users.role })
+          .from(users)
+          .where(
+            and(
+              inArray(users.id, [p.data.responsibleId, ...p.data.memberIds]),
+              isNull(users.archivedAt),
+            ),
+          );
+        const responsible = candidates.find(
+          (candidate) => candidate.id === p.data.responsibleId,
+        );
+        if (!department) return 'DEPARTMENT_NOT_FOUND';
+        if (!responsible || responsible.role === 'superadmin')
+          return 'RESPONSIBILITY_MEMBER_INVALID';
+        if (
+          p.data.memberIds.some(
+            (memberId) =>
+              !candidates.some(
+                (candidate) =>
+                  candidate.id === memberId && candidate.role !== 'superadmin',
+              ),
+          )
+        )
+          return 'RESPONSIBILITY_MEMBER_INVALID';
+        await tx
+          .update(users)
+          .set({ role: 'manager' })
+          .where(eq(users.id, p.data.responsibleId));
+        await tx.insert(responsibilityGroups).values({
+          id: groupId,
+          name: p.data.name,
+          departmentId: p.data.departmentId,
+          responsibleId: p.data.responsibleId,
+        });
+        if (p.data.memberIds.length)
+          await tx
+            .insert(responsibilityGroupMembers)
+            .values(p.data.memberIds.map((userId) => ({ groupId, userId })));
+        await tx
+          .insert(departmentMembers)
+          .values({
+            departmentId: p.data.departmentId,
+            userId: p.data.responsibleId,
+          })
+          .onConflictDoNothing();
+        return 'OK';
+      });
+      if (result !== 'OK') return reply.code(404).send({ code: result });
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error &&
+        'code' in error &&
+        error.code === '23505'
+      )
+        return reply.code(409).send({ code: 'RESPONSIBILITY_NAME_TAKEN' });
+      throw error;
+    }
+    return reply.code(201).send({ group: { id: groupId } });
+  });
+
+  app.put('/admin/groups/:groupId', async (r, reply) => {
+    const u = await user(r, reply),
+      groupId = id(r, 'groupId'),
+      p = responsibilityGroupInput.safeParse(r.body);
+    if (!u) return;
+    if (u.role !== 'superadmin')
+      return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!groupId.success)
+      return reply.code(404).send({ code: 'RESPONSIBILITY_GROUP_NOT_FOUND' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    try {
+      const result = await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-responsibility-groups'))`,
+        );
+        const existing = (
+          await tx
+            .select({ responsibleId: responsibilityGroups.responsibleId })
+            .from(responsibilityGroups)
+            .where(eq(responsibilityGroups.id, groupId.data))
+            .limit(1)
+        )[0];
+        if (!existing) return 'RESPONSIBILITY_GROUP_NOT_FOUND';
+        const department = (
+          await tx
+            .select({ id: departments.id })
+            .from(departments)
+            .where(eq(departments.id, p.data.departmentId))
+            .limit(1)
+        )[0];
+        const candidates = await tx
+          .select({ id: users.id, role: users.role })
+          .from(users)
+          .where(
+            and(
+              inArray(users.id, [p.data.responsibleId, ...p.data.memberIds]),
+              isNull(users.archivedAt),
+            ),
+          );
+        const responsible = candidates.find(
+          (candidate) => candidate.id === p.data.responsibleId,
+        );
+        if (!department) return 'DEPARTMENT_NOT_FOUND';
+        if (!responsible || responsible.role === 'superadmin')
+          return 'RESPONSIBILITY_MEMBER_INVALID';
+        if (
+          p.data.memberIds.some(
+            (memberId) =>
+              !candidates.some(
+                (candidate) =>
+                  candidate.id === memberId && candidate.role !== 'superadmin',
+              ),
+          )
+        )
+          return 'RESPONSIBILITY_MEMBER_INVALID';
+        await tx
+          .update(users)
+          .set({ role: 'manager' })
+          .where(eq(users.id, p.data.responsibleId));
+        await tx
+          .delete(responsibilityGroupMembers)
+          .where(eq(responsibilityGroupMembers.groupId, groupId.data));
+        await tx
+          .update(responsibilityGroups)
+          .set({
+            name: p.data.name,
+            departmentId: p.data.departmentId,
+            responsibleId: p.data.responsibleId,
+          })
+          .where(eq(responsibilityGroups.id, groupId.data));
+        if (p.data.memberIds.length)
+          await tx.insert(responsibilityGroupMembers).values(
+            p.data.memberIds.map((userId) => ({
+              groupId: groupId.data,
+              userId,
+            })),
+          );
+        await tx
+          .insert(departmentMembers)
+          .values({
+            departmentId: p.data.departmentId,
+            userId: p.data.responsibleId,
+          })
+          .onConflictDoNothing();
+        if (existing.responsibleId !== p.data.responsibleId) {
+          const stillResponsible = (
+            await tx
+              .select({ id: responsibilityGroups.id })
+              .from(responsibilityGroups)
+              .where(
+                eq(responsibilityGroups.responsibleId, existing.responsibleId),
+              )
+              .limit(1)
+          )[0];
+          if (!stillResponsible)
+            await tx
+              .update(users)
+              .set({ role: 'user' })
+              .where(eq(users.id, existing.responsibleId));
+        }
+        return 'OK';
+      });
+      if (result === 'RESPONSIBILITY_GROUP_NOT_FOUND')
+        return reply.code(404).send({ code: result });
+      if (result !== 'OK') return reply.code(404).send({ code: result });
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error &&
+        'code' in error &&
+        error.code === '23505'
+      )
+        return reply.code(409).send({ code: 'RESPONSIBILITY_NAME_TAKEN' });
+      throw error;
+    }
+    return reply.code(204).send();
+  });
+
+  app.delete('/admin/groups/:groupId', async (r, reply) => {
+    const u = await user(r, reply),
+      groupId = id(r, 'groupId');
+    if (!u) return;
+    if (u.role !== 'superadmin')
+      return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!groupId.success)
+      return reply.code(404).send({ code: 'RESPONSIBILITY_GROUP_NOT_FOUND' });
+    const deleted = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-responsibility-groups'))`,
+      );
+      const group = (
+        await tx
+          .delete(responsibilityGroups)
+          .where(eq(responsibilityGroups.id, groupId.data))
+          .returning({ responsibleId: responsibilityGroups.responsibleId })
+      )[0];
+      if (!group) return null;
+      const stillResponsible = (
+        await tx
+          .select({ id: responsibilityGroups.id })
+          .from(responsibilityGroups)
+          .where(eq(responsibilityGroups.responsibleId, group.responsibleId))
+          .limit(1)
+      )[0];
+      if (!stillResponsible)
+        await tx
+          .update(users)
+          .set({ role: 'user' })
+          .where(eq(users.id, group.responsibleId));
+      return group;
+    });
+    if (!deleted)
+      return reply.code(404).send({ code: 'RESPONSIBILITY_GROUP_NOT_FOUND' });
+    return reply.code(204).send();
+  });
+
   app.get('/admin/users', async (r, reply) => {
     const u = await user(r, reply),
       p = z
@@ -1864,7 +2227,8 @@ export async function buildApp() {
         .strict()
         .safeParse(r.query);
     if (!u) return;
-    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!canOpenUserAdministration(u.role))
+      return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     const statusFilter =
       p.data.status === 'active'
@@ -1872,6 +2236,19 @@ export async function buildApp() {
         : p.data.status === 'archived'
           ? isNotNull(users.archivedAt)
           : undefined;
+    const managedIds =
+      u.role === 'manager'
+        ? (
+            await db
+              .select({ userId: responsibilityGroupMembers.userId })
+              .from(responsibilityGroupMembers)
+              .innerJoin(
+                responsibilityGroups,
+                eq(responsibilityGroups.id, responsibilityGroupMembers.groupId),
+              )
+              .where(eq(responsibilityGroups.responsibleId, u.id))
+          ).map((item) => item.userId)
+        : null;
     const baseUsers = await db
       .select({
         id: users.id,
@@ -1887,6 +2264,11 @@ export async function buildApp() {
         and(
           statusFilter,
           u.role === 'admin' ? eq(users.role, 'user') : undefined,
+          u.role === 'manager'
+            ? managedIds?.length
+              ? inArray(users.id, managedIds)
+              : sql`false`
+            : undefined,
         ),
       )
       .orderBy(users.email, users.id);
@@ -1935,6 +2317,8 @@ export async function buildApp() {
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     if (u.role === 'admin' && p.data.role !== 'user')
       return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (p.data.role === 'manager')
+      return reply.code(409).send({ code: 'MANAGER_ROLE_REQUIRES_GROUP' });
     const created = {
       id: crypto.randomUUID(),
       email: normalizeEmail(p.data.email),
@@ -1971,13 +2355,23 @@ export async function buildApp() {
       targetId = id(r, 'userId'),
       p = adminUserPatchInput.safeParse(r.body);
     if (!u) return;
-    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!canOpenUserAdministration(u.role))
+      return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!targetId.success)
       return reply.code(404).send({ code: 'USER_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     if (targetId.data === u.id && p.data.role !== undefined)
       return reply.code(409).send({ code: 'SELF_ROLE_CHANGE' });
+    if (u.role === 'manager' && p.data.role !== undefined)
+      return reply.code(403).send({ code: 'FORBIDDEN' });
     if (p.data.role !== undefined && !canChangeAccountRole(u.role))
+      return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (p.data.role === 'manager')
+      return reply.code(409).send({ code: 'MANAGER_ROLE_REQUIRES_GROUP' });
+    if (
+      u.role === 'manager' &&
+      !(await managerCanManageUser(u.id, targetId.data))
+    )
       return reply.code(403).send({ code: 'FORBIDDEN' });
     const passwordHash = p.data.password
       ? await hashPassword(p.data.password)
@@ -1994,7 +2388,14 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!target) return 'USER_NOT_FOUND';
-      if (!canManageAccount(u.role, target.role)) return 'FORBIDDEN';
+      if (
+        u.role === 'manager' &&
+        target.role !== 'user' &&
+        p.data.password !== undefined
+      )
+        return 'FORBIDDEN';
+      if (u.role !== 'manager' && !canManageAccount(u.role, target.role))
+        return 'FORBIDDEN';
       if (
         target.role === 'superadmin' &&
         p.data.role !== undefined &&
@@ -2006,6 +2407,30 @@ export async function buildApp() {
           .where(and(eq(users.role, 'superadmin'), isNull(users.archivedAt)))
           .limit(2);
         if (activeSuperadmins.length <= 1) return 'LAST_SUPERADMIN';
+      }
+      if (
+        target.role === 'manager' &&
+        p.data.role !== undefined &&
+        p.data.role !== 'manager'
+      ) {
+        const assignedGroup = (
+          await tx
+            .select({ id: responsibilityGroups.id })
+            .from(responsibilityGroups)
+            .where(eq(responsibilityGroups.responsibleId, targetId.data))
+            .limit(1)
+        )[0];
+        if (assignedGroup) return 'RESPONSIBLE_HAS_GROUPS';
+      }
+      if (p.data.role === 'superadmin') {
+        const groupMembership = (
+          await tx
+            .select({ groupId: responsibilityGroupMembers.groupId })
+            .from(responsibilityGroupMembers)
+            .where(eq(responsibilityGroupMembers.userId, targetId.data))
+            .limit(1)
+        )[0];
+        if (groupMembership) return 'RESPONSIBILITY_MEMBER_ROLE_CONFLICT';
       }
       await tx
         .update(users)
@@ -2058,6 +2483,11 @@ export async function buildApp() {
     if (result === 'FORBIDDEN') return reply.code(403).send({ code: result });
     if (result === 'LAST_SUPERADMIN')
       return reply.code(409).send({ code: result });
+    if (
+      result === 'RESPONSIBLE_HAS_GROUPS' ||
+      result === 'RESPONSIBILITY_MEMBER_ROLE_CONFLICT'
+    )
+      return reply.code(409).send({ code: result });
     return reply.code(204).send();
   });
   app.delete('/admin/users/:userId', async (r, reply) => {
@@ -2090,6 +2520,16 @@ export async function buildApp() {
           .limit(2);
         if (activeSuperadmins.length <= 1) return 'LAST_SUPERADMIN';
       }
+      if (target.role === 'manager') {
+        const assignedGroup = (
+          await tx
+            .select({ id: responsibilityGroups.id })
+            .from(responsibilityGroups)
+            .where(eq(responsibilityGroups.responsibleId, targetId.data))
+            .limit(1)
+        )[0];
+        if (assignedGroup) return 'RESPONSIBLE_HAS_GROUPS';
+      }
       const now = new Date();
       await tx
         .update(timeEntries)
@@ -2107,6 +2547,9 @@ export async function buildApp() {
       await tx
         .delete(departmentMembers)
         .where(eq(departmentMembers.userId, targetId.data));
+      await tx
+        .delete(responsibilityGroupMembers)
+        .where(eq(responsibilityGroupMembers.userId, targetId.data));
       await tx.execute(sql`
         insert into task_events(id, task_id, actor_id, type, from_assignee_id)
         select gen_random_uuid(), t.id, ${u.id}, 'assignee_changed', t.assignee_id
@@ -2126,6 +2569,8 @@ export async function buildApp() {
       return reply.code(404).send({ code: result });
     if (result === 'FORBIDDEN') return reply.code(403).send({ code: result });
     if (result === 'LAST_SUPERADMIN')
+      return reply.code(409).send({ code: result });
+    if (result === 'RESPONSIBLE_HAS_GROUPS')
       return reply.code(409).send({ code: result });
     return reply.code(204).send();
   });
@@ -2165,10 +2610,25 @@ export async function buildApp() {
       targetId = id(r, 'userId'),
       p = accessInput.safeParse(r.body);
     if (!u) return;
-    if (!isElevated(u.role)) return reply.code(403).send({ code: 'FORBIDDEN' });
+    if (!canOpenUserAdministration(u.role))
+      return reply.code(403).send({ code: 'FORBIDDEN' });
     if (!targetId.success)
       return reply.code(404).send({ code: 'USER_NOT_FOUND' });
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    if (
+      u.role === 'manager' &&
+      !(await managerCanManageUser(u.id, targetId.data))
+    )
+      return reply.code(403).send({ code: 'FORBIDDEN' });
+    const allowedDepartments =
+      u.role === 'manager' ? await managerDepartmentIds(u.id) : null;
+    if (
+      allowedDepartments &&
+      p.data.departmentIds.some(
+        (departmentId) => !allowedDepartments.includes(departmentId),
+      )
+    )
+      return reply.code(403).send({ code: 'OUTSIDE_RESPONSIBILITY_SCOPE' });
     const result = await db.transaction(async (tx) => {
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext('minimal-kanban-active-admins'))`,
@@ -2195,7 +2655,7 @@ export async function buildApp() {
         : [];
       const existingBoards = p.data.boardIds.length
         ? await tx
-            .select({ id: boards.id })
+            .select({ id: boards.id, departmentId: boards.departmentId })
             .from(boards)
             .where(inArray(boards.id, p.data.boardIds))
         : [];
@@ -2204,6 +2664,13 @@ export async function buildApp() {
         existingBoards.length !== p.data.boardIds.length
       )
         return 'ASSIGNMENT_TARGET_NOT_FOUND';
+      if (
+        allowedDepartments &&
+        existingBoards.some(
+          (board) => !allowedDepartments.includes(board.departmentId),
+        )
+      )
+        return 'OUTSIDE_RESPONSIBILITY_SCOPE';
       await tx
         .delete(boardMembers)
         .where(eq(boardMembers.userId, targetId.data));
@@ -2245,6 +2712,8 @@ export async function buildApp() {
       return reply.code(404).send({ code: result });
     if (result === 'ASSIGNMENT_TARGET_NOT_FOUND')
       return reply.code(404).send({ code: result });
+    if (result === 'OUTSIDE_RESPONSIBILITY_SCOPE')
+      return reply.code(403).send({ code: result });
     return reply.code(204).send();
   });
   app.patch('/boards/:boardId', async (r, reply) => {
