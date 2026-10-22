@@ -30,7 +30,7 @@ type Member = {
   email: string;
   firstName?: string | null;
   lastName?: string | null;
-  role: 'superadmin' | 'admin' | 'user';
+  role: 'superadmin' | 'admin' | 'manager' | 'user';
 };
 type Contributor = Member & {
   points: number;

@@ -7,6 +7,7 @@ import {
 import {
   canChangeAccountRole,
   canManageAccount,
+  canOpenUserAdministration,
   isElevated,
 } from '../src/policy.js';
 
@@ -30,6 +31,7 @@ describe('first-slice domain invariants', () => {
 describe('role policy', () => {
   it('keeps global access and account-management boundaries explicit', () => {
     expect(isElevated('admin')).toBe(true);
+    expect(isElevated('manager')).toBe(false);
     expect(isElevated('user')).toBe(false);
     expect(canManageAccount('admin', 'user')).toBe(true);
     expect(canManageAccount('admin', 'admin')).toBe(false);
@@ -38,5 +40,7 @@ describe('role policy', () => {
     expect(canManageAccount('superadmin', 'superadmin')).toBe(true);
     expect(canChangeAccountRole('admin')).toBe(false);
     expect(canChangeAccountRole('superadmin')).toBe(true);
+    expect(canOpenUserAdministration('manager')).toBe(true);
+    expect(canOpenUserAdministration('user')).toBe(false);
   });
 });

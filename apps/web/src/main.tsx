@@ -104,7 +104,7 @@ import 'dayjs/locale/ru';
 import './styles.css';
 import { TeamProgress } from './TeamProgress';
 import { RewardAvatar } from './RewardAvatar';
-type AccountRole = 'superadmin' | 'admin' | 'user';
+type AccountRole = 'superadmin' | 'admin' | 'manager' | 'user';
 type User = {
   id: string;
   email: string;
@@ -119,6 +119,14 @@ type AdminUser = User & {
   boardIds?: string[];
   departmentCount?: number;
   boardCount?: number;
+};
+type ResponsibilityGroup = {
+  id: string;
+  name: string;
+  departmentId: string;
+  departmentName: string;
+  responsible: User;
+  members: AdminUser[];
 };
 type Board = {
   id: string;
@@ -265,15 +273,38 @@ const ru: Record<string, string> = {
   SELF_ARCHIVE: 'Нельзя отключить свою учётную запись',
   DEPARTMENT_HAS_BOARDS:
     'Сначала перенесите или удалите все доски отдела, включая архивные',
+  DEPARTMENT_HAS_RESPONSIBILITY_GROUPS:
+    'Сначала удалите группы ответственности этого отдела',
   BOARD_NOT_ARCHIVED: 'Сначала архивируйте доску',
   BOARD_NOT_EMPTY:
     'Доску с задачами нельзя удалить навсегда — оставьте её в архиве',
+  MANAGER_ROLE_REQUIRES_GROUP:
+    'Роль ответственного назначается при создании группы',
+  RESPONSIBLE_HAS_GROUPS:
+    'Сначала назначьте другого ответственного или удалите его группы',
+  RESPONSIBILITY_MEMBER_ROLE_CONFLICT:
+    'Сотрудника группы нельзя сделать суперадминистратором',
+  RESPONSIBILITY_MEMBER_INVALID:
+    'Выберите активных сотрудников без роли суперадминистратора',
+  RESPONSIBILITY_NAME_TAKEN: 'В этом отделе уже есть группа с таким названием',
+  OUTSIDE_RESPONSIBILITY_SCOPE:
+    'Можно назначать доступ только в пределах ответственной группы',
 };
 const roleLabel: Record<AccountRole, string> = {
   user: 'Пользователь',
   admin: 'Администратор',
+  manager: 'Ответственный',
   superadmin: 'Суперадминистратор',
 };
+const assignableRoleOptions = (['user', 'admin', 'superadmin'] as const).map(
+  (value) => ({ value, label: roleLabel[value] }),
+);
+const displayedRoleOptions = [
+  ...assignableRoleOptions,
+  { value: 'manager', label: roleLabel.manager, disabled: true },
+];
+const isGlobalAdmin = (role: AccountRole) =>
+  role === 'superadmin' || role === 'admin';
 const accessSourceLabel: Record<NonNullable<Person['accessSource']>, string> = {
   board: 'Доступ выдан к доске',
   department: 'Доступ через отдел',
@@ -809,6 +840,298 @@ function UserMenu({
     </Menu>
   );
 }
+function ResponsibilityGroupsPanel({
+  departments,
+  users,
+  refreshUsers,
+}: {
+  departments: Department[];
+  users: AdminUser[];
+  refreshUsers: () => Promise<unknown>;
+}) {
+  const groups = useQuery<{ groups: ResponsibilityGroup[] }>({
+      queryKey: ['responsibility-groups'],
+      queryFn: () => api('/admin/groups'),
+    }),
+    [editing, setEditing] = useState<ResponsibilityGroup | 'new' | null>(null),
+    [deleting, setDeleting] = useState<ResponsibilityGroup | null>(null),
+    [name, setName] = useState(''),
+    [departmentId, setDepartmentId] = useState(''),
+    [responsibleId, setResponsibleId] = useState(''),
+    [memberIds, setMemberIds] = useState<string[]>([]),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState('');
+  const openEditor = (group: ResponsibilityGroup | 'new') => {
+    setEditing(group);
+    setName(group === 'new' ? '' : group.name);
+    setDepartmentId(group === 'new' ? '' : group.departmentId);
+    setResponsibleId(group === 'new' ? '' : group.responsible.id);
+    setMemberIds(group === 'new' ? [] : group.members.map((item) => item.id));
+    setError('');
+  };
+  const eligible = users.filter(
+    (item) => !item.archivedAt && item.role !== 'superadmin',
+  );
+  const personOption = (item: AdminUser) => ({
+    value: item.id,
+    label: `${personLabel(item)} · ${roleLabel[item.role]}`,
+  });
+  return (
+    <section className="responsibility-groups">
+      <div className="responsibility-intro">
+        <div>
+          <span className="eyebrow">Контур ответственности</span>
+          <h2>Группы отделов</h2>
+          <p>
+            Ответственный видит только сотрудников своих групп и управляет их
+            профилями, паролями и доступом внутри закреплённых отделов.
+          </p>
+        </div>
+        <Button
+          leftSection={<Plus size={16} />}
+          onClick={() => openEditor('new')}
+        >
+          Создать группу
+        </Button>
+      </div>
+      {groups.isLoading && <Text c="dimmed">Загружаем группы…</Text>}
+      {groups.isError && (
+        <Text c="red" role="alert">
+          Не удалось загрузить группы
+        </Text>
+      )}
+      {groups.data?.groups.length === 0 && (
+        <div className="responsibility-empty">
+          <UsersRound size={24} />
+          <div>
+            <strong>Группы ещё не созданы</strong>
+            <span>Начните с отдела, ответственного и состава сотрудников.</span>
+          </div>
+        </div>
+      )}
+      <div className="responsibility-grid">
+        {groups.data?.groups.map((group) => (
+          <article className="responsibility-card" key={group.id}>
+            <div className="responsibility-card-heading">
+              <div>
+                <Badge variant="light">{group.departmentName}</Badge>
+                <h3>{group.name}</h3>
+              </div>
+              <Menu position="bottom-end" shadow="md">
+                <Menu.Target>
+                  <ActionIcon
+                    variant="subtle"
+                    color="gray"
+                    aria-label={`Действия группы ${group.name}`}
+                  >
+                    <MoreHorizontal size={18} />
+                  </ActionIcon>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item
+                    leftSection={<Pencil size={15} />}
+                    onClick={() => openEditor(group)}
+                  >
+                    Изменить
+                  </Menu.Item>
+                  <Menu.Item
+                    color="red"
+                    leftSection={<Trash2 size={15} />}
+                    onClick={() => setDeleting(group)}
+                  >
+                    Удалить
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+            </div>
+            <div className="responsibility-owner">
+              <RewardAvatar name={personLabel(group.responsible)} size={38} />
+              <div>
+                <span>Ответственный</span>
+                <strong>{personLabel(group.responsible)}</strong>
+                <small>{group.responsible.email}</small>
+              </div>
+            </div>
+            <div className="responsibility-members">
+              <span>{group.members.length} сотрудников</span>
+              <div className="responsibility-member-list">
+                {group.members.slice(0, 4).map((member) => (
+                  <Badge key={member.id} variant="outline" color="gray">
+                    {personLabel(member)}
+                  </Badge>
+                ))}
+                {group.members.length > 4 && (
+                  <Badge variant="light" color="gray">
+                    +{group.members.length - 4}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+      <Modal
+        opened={editing !== null}
+        onClose={() => setEditing(null)}
+        title={editing === 'new' ? 'Новая группа' : 'Настроить группу'}
+        centered
+        size={600}
+      >
+        <form
+          className="responsibility-editor"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setBusy(true);
+            setError('');
+            try {
+              await api(
+                editing === 'new'
+                  ? '/admin/groups'
+                  : `/admin/groups/${editing?.id}`,
+                {
+                  method: editing === 'new' ? 'POST' : 'PUT',
+                  body: JSON.stringify({
+                    name,
+                    departmentId,
+                    responsibleId,
+                    memberIds,
+                  }),
+                },
+              );
+              await Promise.all([groups.refetch(), refreshUsers()]);
+              setEditing(null);
+            } catch (reason) {
+              setError(err(reason));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <div className="responsibility-editor-note">
+            <UsersRound size={20} />
+            <span>
+              Роль «Ответственный» назначится автоматически. Она даёт управление
+              составом группы, но не глобальные права администратора.
+            </span>
+          </div>
+          <TextInput
+            label="Название группы"
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
+            required
+            maxLength={120}
+          />
+          <Select
+            label="Отдел"
+            value={departmentId}
+            onChange={(value) => setDepartmentId(value ?? '')}
+            data={departments.map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
+            comboboxProps={{ withinPortal: false }}
+            searchable
+            required
+          />
+          <Select
+            label="Ответственный"
+            description="Один сотрудник, не суперадминистратор"
+            value={responsibleId}
+            onChange={(value) => {
+              setResponsibleId(value ?? '');
+              setMemberIds((current) => current.filter((id) => id !== value));
+            }}
+            data={eligible.map(personOption)}
+            comboboxProps={{ withinPortal: false }}
+            searchable
+            required
+          />
+          <MultiSelect
+            label="Сотрудники группы"
+            description="Можно включать пользователей и администраторов"
+            value={memberIds}
+            onChange={setMemberIds}
+            data={eligible
+              .filter((item) => item.id !== responsibleId)
+              .map(personOption)}
+            comboboxProps={{ withinPortal: false }}
+            searchable
+            clearable
+          />
+          {error && (
+            <Text c="red" role="alert">
+              {error}
+            </Text>
+          )}
+          <Group justify="flex-end">
+            <Button
+              type="button"
+              variant="subtle"
+              color="gray"
+              onClick={() => setEditing(null)}
+            >
+              Отмена
+            </Button>
+            <Button type="submit" loading={busy}>
+              Сохранить группу
+            </Button>
+          </Group>
+        </form>
+      </Modal>
+      <Modal
+        opened={deleting !== null}
+        onClose={() => setDeleting(null)}
+        title="Удалить группу?"
+        centered
+        size={440}
+      >
+        <Stack>
+          <Text>
+            Группа «{deleting?.name}» исчезнет. Учётные записи и выданные ранее
+            доступы сотрудников сохранятся.
+          </Text>
+          {error && (
+            <Text c="red" role="alert">
+              {error}
+            </Text>
+          )}
+          <Group justify="flex-end">
+            <Button
+              variant="subtle"
+              color="gray"
+              onClick={() => setDeleting(null)}
+            >
+              Отмена
+            </Button>
+            <Button
+              color="red"
+              loading={busy}
+              onClick={async () => {
+                if (!deleting) return;
+                setBusy(true);
+                setError('');
+                try {
+                  await api(`/admin/groups/${deleting.id}`, {
+                    method: 'DELETE',
+                  });
+                  await Promise.all([groups.refetch(), refreshUsers()]);
+                  setDeleting(null);
+                } catch (reason) {
+                  setError(err(reason));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Удалить группу
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </section>
+  );
+}
+
 function AdminUsersDrawer({
   currentUser,
   departments,
@@ -844,9 +1167,15 @@ function AdminUsersDrawer({
     [busy, setBusy] = useState(''),
     [error, setError] = useState('');
   const isSuperadmin = currentUser.role === 'superadmin';
+  const isManager = currentUser.role === 'manager';
   const directory = useQuery<{ users: AdminUser[] }>({
     queryKey: ['admin-users', status],
     queryFn: () => api(`/admin/users?status=${status}`),
+  });
+  const groupCandidates = useQuery<{ users: AdminUser[] }>({
+    queryKey: ['admin-users', 'active', 'group-candidates'],
+    queryFn: () => api('/admin/users?status=active'),
+    enabled: isSuperadmin,
   });
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key);
@@ -896,84 +1225,107 @@ function AdminUsersDrawer({
       classNames={{ content: 'task-drawer', body: 'task-drawer-body' }}
     >
       <Stack gap="lg">
-        <form
-          className="admin-user-create"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const succeeded = await run('create', () =>
-              api('/admin/users', {
-                method: 'POST',
-                body: JSON.stringify({
-                  email,
-                  password,
-                  role: isSuperadmin ? role : 'user',
-                  firstName: firstName.trim() || null,
-                  lastName: lastName.trim() || null,
-                }),
-              }),
-            );
-            if (succeeded) {
-              setCredentialReceipt({ email: email.trim(), password });
-              setEmail('');
-              setFirstName('');
-              setLastName('');
-              setPassword('');
-              setRole('user');
-            }
-          }}
-        >
-          <div className="section-heading">
+        {isSuperadmin && (
+          <ResponsibilityGroupsPanel
+            departments={departments}
+            users={groupCandidates.data?.users ?? []}
+            refreshUsers={async () => {
+              await Promise.all([
+                directory.refetch(),
+                groupCandidates.refetch(),
+              ]);
+            }}
+          />
+        )}
+        {isManager && (
+          <div className="manager-scope-note">
+            <UsersRound size={22} />
             <div>
-              <h2>Новый пользователь</h2>
-              <p>Доступ к отделам и доскам выдаётся отдельно</p>
+              <strong>Ваша зона ответственности</strong>
+              <span>
+                Здесь только сотрудники закреплённых за вами групп. Доступ можно
+                выдавать в пределах соответствующих отделов.
+              </span>
             </div>
           </div>
-          <TextInput
-            label="Email"
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.currentTarget.value)}
-            required
-          />
-          <Group grow align="flex-start">
-            <TextInput
-              label="Фамилия"
-              value={lastName}
-              onChange={(event) => setLastName(event.currentTarget.value)}
-              maxLength={80}
-            />
-            <TextInput
-              label="Имя"
-              value={firstName}
-              onChange={(event) => setFirstName(event.currentTarget.value)}
-              maxLength={80}
-            />
-          </Group>
-          <PasswordComposer
-            label="Пароль для входа"
-            value={password}
-            onChange={setPassword}
-          />
-          {isSuperadmin && (
-            <Select
-              label="Роль"
-              value={role}
-              onChange={(value) => setRole(value as AccountRole)}
-              data={Object.entries(roleLabel).map(([value, label]) => ({
-                value,
-                label,
-              }))}
-              allowDeselect={false}
-            />
-          )}
-          <Button
-            type="submit"
-            leftSection={<Plus size={16} />}
-            loading={busy === 'create'}
+        )}
+        {!isManager && (
+          <form
+            className="admin-user-create"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              const succeeded = await run('create', () =>
+                api('/admin/users', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    email,
+                    password,
+                    role: isSuperadmin ? role : 'user',
+                    firstName: firstName.trim() || null,
+                    lastName: lastName.trim() || null,
+                  }),
+                }),
+              );
+              if (succeeded) {
+                setCredentialReceipt({ email: email.trim(), password });
+                setEmail('');
+                setFirstName('');
+                setLastName('');
+                setPassword('');
+                setRole('user');
+              }
+            }}
           >
-            Создать пользователя
-          </Button>
-        </form>
+            <div className="section-heading">
+              <div>
+                <h2>Новый пользователь</h2>
+                <p>Доступ к отделам и доскам выдаётся отдельно</p>
+              </div>
+            </div>
+            <TextInput
+              label="Email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.currentTarget.value)}
+              required
+            />
+            <Group grow align="flex-start">
+              <TextInput
+                label="Фамилия"
+                value={lastName}
+                onChange={(event) => setLastName(event.currentTarget.value)}
+                maxLength={80}
+              />
+              <TextInput
+                label="Имя"
+                value={firstName}
+                onChange={(event) => setFirstName(event.currentTarget.value)}
+                maxLength={80}
+              />
+            </Group>
+            <PasswordComposer
+              label="Пароль для входа"
+              value={password}
+              onChange={setPassword}
+            />
+            {isSuperadmin && (
+              <Select
+                label="Роль"
+                value={role}
+                onChange={(value) => setRole(value as AccountRole)}
+                data={assignableRoleOptions}
+                allowDeselect={false}
+              />
+            )}
+            <Button
+              type="submit"
+              leftSection={<Plus size={16} />}
+              loading={busy === 'create'}
+            >
+              Создать пользователя
+            </Button>
+          </form>
+        )}
 
         {credentialReceipt && (
           <CredentialReceipt
@@ -983,17 +1335,19 @@ function AdminUsersDrawer({
           />
         )}
 
-        <Tabs
-          value={status}
-          onChange={(value) =>
-            setStatus((value as 'active' | 'archived') ?? 'active')
-          }
-        >
-          <Tabs.List>
-            <Tabs.Tab value="active">Активные</Tabs.Tab>
-            <Tabs.Tab value="archived">Отключённые</Tabs.Tab>
-          </Tabs.List>
-        </Tabs>
+        {!isManager && (
+          <Tabs
+            value={status}
+            onChange={(value) =>
+              setStatus((value as 'active' | 'archived') ?? 'active')
+            }
+          >
+            <Tabs.List>
+              <Tabs.Tab value="active">Активные</Tabs.Tab>
+              <Tabs.Tab value="archived">Отключённые</Tabs.Tab>
+            </Tabs.List>
+          </Tabs>
+        )}
 
         {directory.isLoading && <Text c="dimmed">Загружаем…</Text>}
         {directory.isError && (
@@ -1012,7 +1366,12 @@ function AdminUsersDrawer({
           {directory.data?.users.map((item) => {
             const ownAccount = item.id === currentUser.id,
               ordinaryUser = item.role === 'user',
-              canManageAccount = isSuperadmin || ordinaryUser;
+              canManageAccount =
+                isSuperadmin ||
+                isManager ||
+                (currentUser.role === 'admin' && ordinaryUser),
+              canArchive =
+                isSuperadmin || (currentUser.role === 'admin' && ordinaryUser);
             return (
               <section className="admin-user-row" key={item.id}>
                 <div className="admin-user-summary">
@@ -1055,9 +1414,7 @@ function AdminUsersDrawer({
                           className="admin-role-select"
                           aria-label={`Роль ${item.email}`}
                           value={item.role}
-                          data={Object.entries(roleLabel).map(
-                            ([value, label]) => ({ value, label }),
-                          )}
+                          data={displayedRoleOptions}
                           allowDeselect={false}
                           disabled={ownAccount || Boolean(busy)}
                           onChange={(value) =>
@@ -1082,22 +1439,24 @@ function AdminUsersDrawer({
                       )}
                       {canManageAccount && (
                         <>
-                          <ActionIcon
-                            variant="subtle"
-                            color="gray"
-                            size="lg"
-                            aria-label={`Изменить ФИО ${item.email}`}
-                            onClick={() => {
-                              setProfileTarget(item);
-                              setProfileLastName(item.lastName ?? '');
-                              setProfileFirstName(item.firstName ?? '');
-                              setPasswordTarget(null);
-                              setArchiveTarget(null);
-                              closeAccess();
-                            }}
-                          >
-                            <Pencil size={17} />
-                          </ActionIcon>
+                          {canArchive && (
+                            <ActionIcon
+                              variant="subtle"
+                              color="gray"
+                              size="lg"
+                              aria-label={`Изменить ФИО ${item.email}`}
+                              onClick={() => {
+                                setProfileTarget(item);
+                                setProfileLastName(item.lastName ?? '');
+                                setProfileFirstName(item.firstName ?? '');
+                                setPasswordTarget(null);
+                                setArchiveTarget(null);
+                                closeAccess();
+                              }}
+                            >
+                              <Pencil size={17} />
+                            </ActionIcon>
+                          )}
                           <ActionIcon
                             variant="subtle"
                             color="gray"
@@ -1134,11 +1493,14 @@ function AdminUsersDrawer({
                     </Group>
                   )}
                 </div>
-                {!ordinaryUser && !isSuperadmin && !item.archivedAt && (
-                  <Text size="xs" c="dimmed">
-                    Управлять учётной записью может только суперадминистратор.
-                  </Text>
-                )}
+                {!ordinaryUser &&
+                  !isSuperadmin &&
+                  !isManager &&
+                  !item.archivedAt && (
+                    <Text size="xs" c="dimmed">
+                      Управлять учётной записью может только суперадминистратор.
+                    </Text>
+                  )}
                 {accessTarget?.id === item.id && (
                   <form
                     className="access-editor"
@@ -3346,7 +3708,7 @@ function Settings({
     directory = useQuery<{ users: AdminUser[] }>({
       queryKey: ['admin-users', 'active'],
       queryFn: () => api('/admin/users?status=active'),
-      enabled: currentUser.role !== 'user',
+      enabled: isGlobalAdmin(currentUser.role),
     }),
     [boardName, setBoardName] = useState(data.board.name),
     [boardDepartment, setBoardDepartment] = useState(
@@ -3397,7 +3759,7 @@ function Settings({
           <Tabs.Tab value="general">Общие</Tabs.Tab>
           <Tabs.Tab value="columns">Колонки</Tabs.Tab>
           <Tabs.Tab value="taxonomy">Темы и метки</Tabs.Tab>
-          {currentUser.role !== 'user' && (
+          {isGlobalAdmin(currentUser.role) && (
             <Tabs.Tab value="members">Доступ</Tabs.Tab>
           )}
         </Tabs.List>
@@ -3805,7 +4167,7 @@ function Settings({
           </div>
         </Tabs.Panel>
 
-        {currentUser.role !== 'user' && (
+        {isGlobalAdmin(currentUser.role) && (
           <Tabs.Panel value="members" pt="lg">
             <Stack gap="md">
               <div className="section-heading">

@@ -120,7 +120,7 @@ database('PostgreSQL invariants', () => {
     }
   });
 
-  it.each(['0014_', '0015_', '0016_', '0018_'])(
+  it.each(['0014_', '0015_', '0016_', '0018_', '0020_'])(
     'upgrades a populated schema before %s without losing tasks',
     async (cutoff) => {
       const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -420,7 +420,7 @@ database('PostgreSQL invariants', () => {
     ).toEqual([]);
   });
 
-  it('uses superadmin, admin, and user account roles and defaults to user', async () => {
+  it('uses scoped manager alongside global roles and defaults to user', async () => {
     const roles = await client.query<{ enumlabel: string }>(
       `select enumlabel
        from pg_enum
@@ -431,6 +431,7 @@ database('PostgreSQL invariants', () => {
     expect(roles.rows.map((row) => row.enumlabel)).toEqual([
       'superadmin',
       'admin',
+      'manager',
       'user',
     ]);
 
@@ -442,6 +443,93 @@ database('PostgreSQL invariants', () => {
       [defaultUserId, `${defaultUserId}@example.test`],
     );
     expect(created.rows[0]?.role).toBe('user');
+  });
+
+  it('enforces responsibility group roles and active membership', async () => {
+    const managerId = crypto.randomUUID(),
+      adminId = crypto.randomUUID(),
+      groupId = crypto.randomUUID(),
+      invalidGroupId = crypto.randomUUID(),
+      groupDepartmentId = crypto.randomUUID();
+    const expectConstraint = async (
+      statement: string,
+      values: unknown[],
+      code = '23514',
+    ) => {
+      await client.query('savepoint responsibility_constraint');
+      try {
+        await client.query(statement, values);
+        throw new Error('Expected responsibility constraint to reject write');
+      } catch (error) {
+        expect(error).toMatchObject({ code });
+      } finally {
+        await client.query('rollback to savepoint responsibility_constraint');
+        await client.query('release savepoint responsibility_constraint');
+      }
+    };
+    await client.query(
+      `insert into users(id,email,password_hash,role)
+       values ($1,$2,'hash','manager'),($3,$4,'hash','admin')`,
+      [
+        managerId,
+        `${managerId}@example.test`,
+        adminId,
+        `${adminId}@example.test`,
+      ],
+    );
+    await client.query(`insert into departments(id,name) values ($1,$2)`, [
+      groupDepartmentId,
+      `Group ${groupDepartmentId}`,
+    ]);
+    await client.query(
+      `insert into responsibility_groups(id,name,department_id,responsible_id)
+       values ($1,'Support',$2,$3)`,
+      [groupId, groupDepartmentId, managerId],
+    );
+    await client.query(
+      `insert into responsibility_group_members(group_id,user_id)
+       values ($1,$2)`,
+      [groupId, adminId],
+    );
+    await client.query(
+      `insert into department_members(department_id,user_id) values ($1,$2)`,
+      [groupDepartmentId, managerId],
+    );
+
+    await expectConstraint(`update users set role='user' where id=$1`, [
+      managerId,
+    ]);
+    await expectConstraint(`update users set archived_at=now() where id=$1`, [
+      managerId,
+    ]);
+    await expectConstraint(
+      `insert into responsibility_group_members(group_id,user_id)
+       values ($1,$2)`,
+      [groupId, userA],
+    );
+    await expectConstraint(
+      `insert into responsibility_groups(id,name,department_id,responsible_id)
+       values ($1,'Invalid',$2,$3)`,
+      [invalidGroupId, groupDepartmentId, userB],
+    );
+    await expectConstraint(
+      `delete from departments where id=$1`,
+      [groupDepartmentId],
+      '23503',
+    );
+
+    await client.query(`delete from responsibility_groups where id=$1`, [
+      groupId,
+    ]);
+    await client.query(`update users set role='user' where id=$1`, [managerId]);
+    expect(
+      (
+        await client.query<{ role: string }>(
+          'select role::text as role from users where id=$1',
+          [managerId],
+        )
+      ).rows[0]?.role,
+    ).toBe('user');
   });
 
   it('allows legacy accounts without names and validates supplied names', async () => {

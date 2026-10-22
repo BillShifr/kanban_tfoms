@@ -12,7 +12,12 @@ import {
   check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-export const userRole = pgEnum('user_role', ['superadmin', 'admin', 'user']);
+export const userRole = pgEnum('user_role', [
+  'superadmin',
+  'admin',
+  'manager',
+  'user',
+]);
 export const boardRole = pgEnum('board_role', ['admin', 'member']);
 export const taskEventType = pgEnum('task_event_type', [
   'created',
@@ -66,7 +71,7 @@ export const boards = pgTable(
     name: text('name').notNull(),
     departmentId: uuid('department_id')
       .notNull()
-      .references(() => departments.id, { onDelete: 'restrict' }),
+      .references(() => departments.id, { onDelete: 'cascade' }),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id),
@@ -101,7 +106,7 @@ export const departmentMembers = pgTable(
   {
     departmentId: uuid('department_id')
       .notNull()
-      .references(() => departments.id, { onDelete: 'cascade' }),
+      .references(() => departments.id, { onDelete: 'restrict' }),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -112,6 +117,54 @@ export const departmentMembers = pgTable(
   (t) => [
     primaryKey({ columns: [t.departmentId, t.userId] }),
     index('department_members_user_idx').on(t.userId, t.departmentId),
+  ],
+);
+export const responsibilityGroups = pgTable(
+  'responsibility_groups',
+  {
+    id: uuid('id').primaryKey(),
+    name: text('name').notNull(),
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id, { onDelete: 'restrict' }),
+    responsibleId: uuid('responsible_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('responsibility_groups_department_name_ci_idx').on(
+      t.departmentId,
+      sql`lower(${t.name})`,
+    ),
+    index('responsibility_groups_responsible_idx').on(
+      t.responsibleId,
+      t.departmentId,
+    ),
+    check(
+      'responsibility_groups_name_check',
+      sql`${t.name} = btrim(${t.name}) AND char_length(${t.name}) BETWEEN 1 AND 120`,
+    ),
+  ],
+);
+export const responsibilityGroupMembers = pgTable(
+  'responsibility_group_members',
+  {
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => responsibilityGroups.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.groupId, t.userId] }),
+    index('responsibility_group_members_user_idx').on(t.userId, t.groupId),
   ],
 );
 export const columns = pgTable(
