@@ -4771,6 +4771,10 @@ function Workspace({
     [sidebarCollapsed, setSidebarCollapsed] = useState(
       () => window.localStorage.getItem('kanban.sidebar-collapsed') === 'true',
     ),
+    [teamRailCollapsed, setTeamRailCollapsed] = useState(
+      () =>
+        window.localStorage.getItem('kanban.collapse.v1.team-rail') === 'true',
+    ),
     [expandedDepartments, setExpandedDepartments] = useState<Set<string>>(
       new Set(),
     ),
@@ -4844,6 +4848,12 @@ function Workspace({
       String(sidebarCollapsed),
     );
   }, [sidebarCollapsed]);
+  useEffect(() => {
+    window.localStorage.setItem(
+      'kanban.collapse.v1.team-rail',
+      String(teamRailCollapsed),
+    );
+  }, [teamRailCollapsed]);
   useEffect(() => {
     const newGroupIds = groups
       .map((group) => group.id)
@@ -5116,7 +5126,7 @@ function Workspace({
   );
   return (
     <main
-      className={`workspace${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+      className={`workspace${sidebarCollapsed ? ' sidebar-collapsed' : ''}${teamRailCollapsed ? ' team-rail-collapsed' : ''}`}
       data-testid="workspace"
     >
       <header data-testid="app-header">
@@ -5155,6 +5165,8 @@ function Workspace({
         request={api}
         profileOpen={profileOpen}
         closeProfile={() => setProfileOpen(false)}
+        railCollapsed={teamRailCollapsed}
+        toggleRail={() => setTeamRailCollapsed((value) => !value)}
       />
       <aside className="workspace-sidebar" data-testid="desktop-sidebar">
         <div className="sidebar-toolbar">
