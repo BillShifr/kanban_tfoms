@@ -124,9 +124,11 @@ const milestones = [
 function Achievements({
   person,
   rewards,
+  onDetailOpenChange,
 }: {
   person: Contributor;
   rewards: RewardsData;
+  onDetailOpenChange?: (opened: boolean) => void;
 }) {
   const [selected, setSelected] = useState<(typeof milestones)[number] | null>(
     null,
@@ -140,7 +142,10 @@ function Achievements({
           return (
             <button
               type="button"
-              onClick={() => setSelected(milestone)}
+              onClick={() => {
+                setSelected(milestone);
+                onDetailOpenChange?.(true);
+              }}
               className={`achievement ${earned ? 'earned' : ''}`}
               key={title}
             >
@@ -165,7 +170,10 @@ function Achievements({
       </div>
       <Modal
         opened={!!selected}
-        onClose={() => setSelected(null)}
+        onClose={() => {
+          setSelected(null);
+          onDetailOpenChange?.(false);
+        }}
         title="Условие достижения"
         centered
         size={440}
@@ -462,6 +470,7 @@ export function TeamProgress({
   );
   const [opened, setOpened] = useState(false);
   const [wardrobeOpen, setWardrobeOpen] = useState(false);
+  const [achievementDetailOpen, setAchievementDetailOpen] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [scope, setScope] = useState<'visible' | 'global'>('visible');
@@ -799,8 +808,11 @@ export function TeamProgress({
       </button>
       <Modal
         opened={opened}
-        closeOnEscape={!wardrobeOpen}
-        onClose={() => setOpened(false)}
+        closeOnEscape={!wardrobeOpen && !achievementDetailOpen}
+        onClose={() => {
+          setAchievementDetailOpen(false);
+          setOpened(false);
+        }}
         size={760}
         centered
         title="Команда и достижения"
@@ -826,7 +838,11 @@ export function TeamProgress({
                   {data.rewards.earned.length} / {milestones.length}
                 </span>
               </div>
-              <Achievements person={data.me} rewards={data.rewards} />
+              <Achievements
+                person={data.me}
+                rewards={data.rewards}
+                onDetailOpenChange={setAchievementDetailOpen}
+              />
               <Button
                 variant="light"
                 mt="md"
@@ -903,6 +919,7 @@ export function TeamProgress({
       </Modal>
       <Modal
         opened={profileOpen}
+        closeOnEscape={!achievementDetailOpen}
         onClose={() => {
           if (profileBusy) return;
           if (
@@ -911,6 +928,7 @@ export function TeamProgress({
           )
             return;
           setProfileDirty(false);
+          setAchievementDetailOpen(false);
           closeProfile();
         }}
         title="Мой профиль"
@@ -952,6 +970,7 @@ export function TeamProgress({
                   <Achievements
                     person={progress.data.me}
                     rewards={progress.data.rewards}
+                    onDetailOpenChange={setAchievementDetailOpen}
                   />
                   <RewardWardrobe
                     rewards={progress.data.rewards}
