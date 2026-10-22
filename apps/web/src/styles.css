@@ -2828,6 +2828,82 @@ a {
 .admin-user-create .section-heading {
   grid-column: 1 / -1;
 }
+.password-composer {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.password-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.password-tools .mantine-Button-root {
+  min-height: 34px;
+}
+.password-copy-status {
+  min-height: 16px;
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.credential-receipt {
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 38%, var(--app-border));
+  border-radius: 12px;
+  background: color-mix(
+    in srgb,
+    var(--app-accent-soft) 48%,
+    var(--app-surface)
+  );
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--app-accent) 72%, #7dd3c7);
+}
+.credential-receipt-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.credential-receipt-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.credential-receipt-heading strong {
+  font-size: 14px;
+}
+.credential-receipt-heading span,
+.credential-email {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+.credential-email {
+  overflow-wrap: anywhere;
+}
+.credential-secret {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.credential-secret code {
+  min-width: 0;
+  flex: 1;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
 .admin-user-list {
   display: grid;
   gap: 10px;
@@ -3126,6 +3202,15 @@ a {
   }
   .admin-user-create {
     grid-template-columns: 1fr;
+  }
+  .password-tools,
+  .credential-secret {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .password-tools .mantine-Button-root,
+  .credential-secret .mantine-Button-root {
+    width: 100%;
   }
   .admin-user-summary {
     align-items: stretch;

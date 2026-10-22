@@ -652,6 +652,9 @@ test.describe('core board workflow', () => {
     page,
     request,
   }) => {
+    await page
+      .context()
+      .grantPermissions(['clipboard-read', 'clipboard-write']);
     await signIn(page);
     const currentResponse = await page.request.get('/api/auth/me');
     expect(currentResponse.status()).toBe(200);
@@ -714,6 +717,38 @@ test.describe('core board workflow', () => {
     await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
     await expect(page.getByText(adminEmail, { exact: true })).toBeVisible();
     await expect(page.getByText(userEmail, { exact: true })).toBeVisible();
+    const generatedEmail = uniqueEmail('generated-user'),
+      createForm = page.locator('.admin-user-create'),
+      createPassword = createForm.getByLabel('Пароль для входа');
+    await createForm.getByLabel('Email').fill(generatedEmail);
+    await createForm
+      .getByRole('button', { name: 'Сгенерировать и скопировать' })
+      .click();
+    await expect(createPassword).toHaveAttribute('type', 'text');
+    const generatedPassword = await createPassword.inputValue();
+    expect(generatedPassword).toHaveLength(18);
+    expect(generatedPassword).toMatch(/[A-Z]/);
+    expect(generatedPassword).toMatch(/[a-z]/);
+    expect(generatedPassword).toMatch(/[0-9]/);
+    expect(generatedPassword).toMatch(/[!@#$%&*\-_=+]/);
+    await expect(
+      createForm.getByText('Пароль скопирован в буфер обмена'),
+    ).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe(generatedPassword);
+    await createForm
+      .getByRole('button', { name: 'Создать пользователя' })
+      .click();
+    const credentials = page.getByRole('region', {
+      name: 'Пароль пользователя',
+    });
+    await expect(credentials).toContainText(generatedEmail);
+    await expect(credentials).toContainText(generatedPassword);
+    const generatedLogin = await request.post('/api/auth/sign-in', {
+      data: { email: generatedEmail, password: generatedPassword },
+    });
+    expect(generatedLogin.status()).toBe(200);
     const adminRow = page.locator('.admin-user-row').filter({
       has: page.getByText(adminEmail, { exact: true }),
     });
@@ -748,13 +783,21 @@ test.describe('core board workflow', () => {
     await chooseOption(page, `Роль ${userEmail}`, 'Администратор');
     await chooseOption(page, `Роль ${userEmail}`, 'Пользователь');
 
-    const updatedPassword = 'sa-user-updated-123';
     await page
       .getByRole('button', { name: `Сменить пароль ${userEmail}` })
       .click();
-    await page
-      .getByLabel(`Новый пароль для ${userEmail}`)
-      .fill(updatedPassword);
+    const passwordPanel = userRow.locator('.user-action-panel'),
+      updatedPasswordInput = passwordPanel.getByLabel(
+        `Новый пароль для ${userEmail}`,
+      );
+    await passwordPanel
+      .getByRole('button', { name: 'Сгенерировать и скопировать' })
+      .click();
+    await expect(updatedPasswordInput).toHaveAttribute('type', 'text');
+    const updatedPassword = await updatedPasswordInput.inputValue();
+    await expect(
+      passwordPanel.getByText('Пароль скопирован в буфер обмена'),
+    ).toBeVisible();
     const [passwordResponse] = await Promise.all([
       page.waitForResponse((response) => {
         const url = new URL(response.url());
@@ -766,6 +809,8 @@ test.describe('core board workflow', () => {
       page.getByRole('button', { name: 'Сменить пароль', exact: true }).click(),
     ]);
     expect(passwordResponse.status()).toBe(204);
+    await expect(credentials).toContainText(userEmail);
+    await expect(credentials).toContainText(updatedPassword);
     await expect(page.getByLabel(`Новый пароль для ${userEmail}`)).toHaveCount(
       0,
     );
@@ -847,7 +892,11 @@ test.describe('core board workflow', () => {
 
   test('admin sees every board, manages user access, and cannot manage elevated accounts', async ({
     page,
+    request,
   }) => {
+    await page
+      .context()
+      .grantPermissions(['clipboard-read', 'clipboard-write']);
     await signIn(page);
     const meResponse = await page.request.get('/api/auth/me');
     const me = (await meResponse.json()) as { user: AdminAccount };
@@ -885,6 +934,62 @@ test.describe('core board workflow', () => {
     ).boards.map((item) => item.name);
     expect(visibleBoardNames).toContain(board.name);
     await selectBoard(page, board.name);
+
+    await page.getByRole('button', { name: adminEmail }).click();
+    await page.getByRole('menuitem', { name: 'Пользователи и права' }).click();
+    const adminCreatedEmail = uniqueEmail('admin-generated-user'),
+      createForm = page.locator('.admin-user-create');
+    await createForm.getByLabel('Email').fill(adminCreatedEmail);
+    await createForm
+      .getByRole('button', { name: 'Сгенерировать и скопировать' })
+      .click();
+    const adminGeneratedPassword = await createForm
+      .getByLabel('Пароль для входа')
+      .inputValue();
+    await createForm
+      .getByRole('button', { name: 'Создать пользователя' })
+      .click();
+    await expect(
+      page.getByRole('region', { name: 'Пароль пользователя' }),
+    ).toContainText(adminGeneratedPassword);
+    const adminCreatedLogin = await request.post('/api/auth/sign-in', {
+      data: {
+        email: adminCreatedEmail,
+        password: adminGeneratedPassword,
+      },
+    });
+    expect(adminCreatedLogin.status()).toBe(200);
+
+    const managedRow = page.locator('.admin-user-row').filter({
+      has: page.getByText(userEmail, { exact: true }),
+    });
+    await managedRow
+      .getByRole('button', { name: `Сменить пароль ${userEmail}` })
+      .click();
+    const passwordPanel = managedRow.locator('.user-action-panel');
+    await passwordPanel
+      .getByRole('button', { name: 'Сгенерировать и скопировать' })
+      .click();
+    const adminResetPassword = await passwordPanel
+      .getByLabel(`Новый пароль для ${userEmail}`)
+      .inputValue();
+    const [adminPasswordResponse] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          response.request().method() === 'PATCH' &&
+          url.pathname === `/api/admin/users/${ordinaryUser.id}`
+        );
+      }),
+      passwordPanel
+        .getByRole('button', { name: 'Сменить пароль', exact: true })
+        .click(),
+    ]);
+    expect(adminPasswordResponse.status()).toBe(204);
+    const adminResetLogin = await request.post('/api/auth/sign-in', {
+      data: { email: userEmail, password: adminResetPassword },
+    });
+    expect(adminResetLogin.status()).toBe(200);
 
     for (const role of ['admin', 'superadmin'] as const) {
       const forbiddenCreation = await page.request.post('/api/admin/users', {

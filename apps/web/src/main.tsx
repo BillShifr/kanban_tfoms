@@ -69,6 +69,8 @@ import {
   ChevronRight,
   Clock3,
   Columns3,
+  Copy,
+  Dices,
   Download,
   Eye,
   FileUp,
@@ -316,6 +318,193 @@ function err(e: unknown) {
         (e as Fail).message ??
         'Не удалось выполнить действие')
     : 'Не удалось выполнить действие';
+}
+const passwordCharacterSets = {
+  upper: 'ABCDEFGHJKLMNPQRSTUVWXYZ',
+  lower: 'abcdefghijkmnopqrstuvwxyz',
+  digits: '23456789',
+  symbols: '!@#$%&*-_=+',
+};
+function randomCharacter(characters: string) {
+  const limit = Math.floor(256 / characters.length) * characters.length;
+  let value = 256;
+  while (value >= limit) {
+    const random = new Uint8Array(1);
+    window.crypto.getRandomValues(random);
+    value = random[0];
+  }
+  return characters[value % characters.length];
+}
+function generatePassword(length = 18) {
+  const sets = Object.values(passwordCharacterSets),
+    all = sets.join(''),
+    characters = sets.map(randomCharacter);
+  while (characters.length < length) characters.push(randomCharacter(all));
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapWith = Number(
+      window.crypto.getRandomValues(new Uint32Array(1))[0] % (index + 1),
+    );
+    [characters[index], characters[swapWith]] = [
+      characters[swapWith],
+      characters[index],
+    ];
+  }
+  return characters.join('');
+}
+async function copyText(value: string) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // The fallback below also works on an internal HTTP deployment.
+    }
+  }
+  const temporary = document.createElement('textarea');
+  temporary.value = value;
+  temporary.setAttribute('readonly', '');
+  temporary.style.position = 'fixed';
+  temporary.style.opacity = '0';
+  document.body.append(temporary);
+  temporary.select();
+  const copied = document.execCommand('copy');
+  temporary.remove();
+  if (!copied) throw new Error('COPY_FAILED');
+}
+function PasswordComposer({
+  label,
+  value,
+  onChange,
+  autoFocus = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  autoFocus?: boolean;
+}) {
+  const [visible, setVisible] = useState(false),
+    [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const copy = async (password: string) => {
+    try {
+      await copyText(password);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('error');
+    }
+  };
+  const generate = () => {
+    const generated = generatePassword();
+    onChange(generated);
+    setVisible(true);
+    void copy(generated);
+  };
+  return (
+    <div className="password-composer">
+      <PasswordInput
+        label={label}
+        description="Не менее 10 символов"
+        minLength={10}
+        value={value}
+        onChange={(event) => {
+          onChange(event.currentTarget.value);
+          setCopyStatus('idle');
+        }}
+        visible={visible}
+        onVisibilityChange={setVisible}
+        autoFocus={autoFocus}
+        required
+      />
+      <div className="password-tools">
+        <Button
+          type="button"
+          variant="light"
+          leftSection={<Dices size={16} />}
+          onClick={generate}
+        >
+          Сгенерировать и скопировать
+        </Button>
+        <Button
+          type="button"
+          variant="subtle"
+          color="gray"
+          leftSection={
+            copyStatus === 'copied' ? <Check size={16} /> : <Copy size={16} />
+          }
+          disabled={!value}
+          onClick={() => void copy(value)}
+        >
+          {copyStatus === 'copied' ? 'Скопирован' : 'Копировать'}
+        </Button>
+      </div>
+      <span className="password-copy-status" aria-live="polite">
+        {copyStatus === 'copied'
+          ? 'Пароль скопирован в буфер обмена'
+          : copyStatus === 'error'
+            ? 'Не удалось скопировать автоматически — выделите пароль вручную'
+            : ''}
+      </span>
+    </div>
+  );
+}
+function CredentialReceipt({
+  email,
+  password,
+  dismiss,
+}: {
+  email: string;
+  password: string;
+  dismiss: () => void;
+}) {
+  const [copied, setCopied] = useState(false),
+    [copyFailed, setCopyFailed] = useState(false);
+  const copy = async () => {
+    try {
+      await copyText(password);
+      setCopied(true);
+      setCopyFailed(false);
+    } catch {
+      setCopied(false);
+      setCopyFailed(true);
+    }
+  };
+  return (
+    <section className="credential-receipt" aria-label="Пароль пользователя">
+      <div className="credential-receipt-heading">
+        <div>
+          <strong>Пароль готов</strong>
+          <span>Показывается только в текущем окне</span>
+        </div>
+        <ActionIcon
+          type="button"
+          variant="subtle"
+          color="gray"
+          aria-label="Закрыть пароль пользователя"
+          onClick={dismiss}
+        >
+          <X size={17} />
+        </ActionIcon>
+      </div>
+      <span className="credential-email">{email}</span>
+      <div className="credential-secret">
+        <code>{password}</code>
+        <Button
+          type="button"
+          variant="light"
+          leftSection={copied ? <Check size={16} /> : <Copy size={16} />}
+          onClick={() => void copy()}
+        >
+          {copied ? 'Скопирован' : 'Копировать пароль'}
+        </Button>
+      </div>
+      <span className="password-copy-status" aria-live="polite">
+        {copied
+          ? 'Пароль скопирован в буфер обмена'
+          : copyFailed
+            ? 'Не удалось скопировать — выделите пароль вручную'
+            : 'Передайте пароль пользователю безопасным способом'}
+      </span>
+    </section>
+  );
 }
 function date(s?: string | null) {
   return s?.slice(0, 10) ?? '';
@@ -648,6 +837,10 @@ function AdminUsersDrawer({
     [accessTarget, setAccessTarget] = useState<AdminUser | null>(null),
     [departmentIds, setDepartmentIds] = useState<string[]>([]),
     [boardIds, setBoardIds] = useState<string[]>([]),
+    [credentialReceipt, setCredentialReceipt] = useState<{
+      email: string;
+      password: string;
+    } | null>(null),
     [busy, setBusy] = useState(''),
     [error, setError] = useState('');
   const isSuperadmin = currentUser.role === 'superadmin';
@@ -720,6 +913,7 @@ function AdminUsersDrawer({
               }),
             );
             if (succeeded) {
+              setCredentialReceipt({ email: email.trim(), password });
               setEmail('');
               setFirstName('');
               setLastName('');
@@ -755,13 +949,10 @@ function AdminUsersDrawer({
               maxLength={80}
             />
           </Group>
-          <PasswordInput
+          <PasswordComposer
             label="Пароль для входа"
-            description="Не менее 10 символов"
-            minLength={10}
             value={password}
-            onChange={(event) => setPassword(event.currentTarget.value)}
-            required
+            onChange={setPassword}
           />
           {isSuperadmin && (
             <Select
@@ -783,6 +974,14 @@ function AdminUsersDrawer({
             Создать пользователя
           </Button>
         </form>
+
+        {credentialReceipt && (
+          <CredentialReceipt
+            email={credentialReceipt.email}
+            password={credentialReceipt.password}
+            dismiss={() => setCredentialReceipt(null)}
+          />
+        )}
 
         <Tabs
           value={status}
@@ -1100,20 +1299,20 @@ function AdminUsersDrawer({
                         }),
                       );
                       if (succeeded) {
+                        setCredentialReceipt({
+                          email: item.email,
+                          password: newPassword,
+                        });
                         setPasswordTarget(null);
                         setNewPassword('');
                       }
                     }}
                   >
-                    <PasswordInput
+                    <PasswordComposer
                       label={`Новый пароль для ${item.email}`}
-                      minLength={10}
                       value={newPassword}
-                      onChange={(event) =>
-                        setNewPassword(event.currentTarget.value)
-                      }
+                      onChange={setNewPassword}
                       autoFocus
-                      required
                     />
                     <Group justify="flex-end">
                       <Button
