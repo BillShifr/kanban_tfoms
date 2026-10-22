@@ -80,6 +80,63 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       (await page.request.get('/api/progress?scope=invalid')).status(),
     ).toBe(400);
 
+    if (!isMobile) {
+      const workspace = page.getByTestId('workspace');
+      const rail = page.getByRole('complementary', {
+        name: 'Команда и достижения',
+      });
+      const expandedColumns = await workspace.evaluate(
+        (element) => getComputedStyle(element).gridTemplateColumns,
+      );
+      await page
+        .getByRole('button', { name: 'Свернуть награды и рейтинг' })
+        .click();
+      await expect(rail).toHaveClass(/is-collapsed/);
+      const peek = page.getByRole('button', {
+        name: 'Развернуть награды и рейтинг',
+      });
+      await expect(peek).toBeVisible();
+      await expect(peek).toContainText('Награды');
+      await expect(peek).toContainText('баллов');
+      await expect(workspace).toHaveClass(/team-rail-collapsed/);
+      expect(
+        await workspace.evaluate(
+          (element) => getComputedStyle(element).gridTemplateColumns,
+        ),
+      ).not.toBe(expandedColumns);
+      expect(
+        await page.evaluate(() =>
+          window.localStorage.getItem('kanban.collapse.v1.team-rail'),
+        ),
+      ).toBe('true');
+      await page.reload();
+      await expect(peek).toBeVisible();
+      expect((await rail.boundingBox())?.width).toBeCloseTo(64, 1);
+      expect(
+        await peek
+          .locator('.team-rail-beacon')
+          .evaluate((element) => getComputedStyle(element).animationName),
+      ).toBe('team-rail-beacon');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      expect(
+        await peek
+          .locator('.team-rail-beacon')
+          .evaluate((element) => getComputedStyle(element).animationName),
+      ).toBe('none');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await peek.click();
+      await expect(
+        page.getByRole('button', { name: 'Свернуть награды и рейтинг' }),
+      ).toBeVisible();
+      expect(
+        await page.evaluate(() =>
+          window.localStorage.getItem('kanban.collapse.v1.team-rail'),
+        ),
+      ).toBe('false');
+    } else {
+      await expect(page.locator('.team-rail-peek')).toBeHidden();
+    }
+
     await page.locator(isMobile ? '.team-mobile-bar' : '.team-open').click();
     const drawer = page.getByRole('dialog', { name: 'Команда и достижения' });
     await drawer.getByText('Все сотрудники', { exact: true }).first().click();
