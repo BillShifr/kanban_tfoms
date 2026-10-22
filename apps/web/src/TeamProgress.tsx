@@ -16,7 +16,7 @@ import {
   TextInput,
   Tabs,
 } from '@mantine/core';
-import { ChevronRight, UserRound } from 'lucide-react';
+import { ChevronLeft, ChevronRight, UserRound } from 'lucide-react';
 import { RewardAvatar } from './RewardAvatar';
 import {
   PointCelebration,
@@ -432,6 +432,8 @@ export function TeamProgress({
   request,
   profileOpen,
   closeProfile,
+  railCollapsed,
+  toggleRail,
 }: {
   headerTarget: HTMLElement | null;
   user: Member;
@@ -439,6 +441,8 @@ export function TeamProgress({
   request: Request;
   profileOpen: boolean;
   closeProfile: () => void;
+  railCollapsed: boolean;
+  toggleRail: () => void;
 }) {
   const queryClient = useQueryClient();
   useEffect(
@@ -639,9 +643,54 @@ export function TeamProgress({
           headerTarget,
         )}
       <PointCelebration events={data?.recentEvents} userId={user.id} />
-      <aside className="team-rail" aria-label="Команда и достижения">
+      <aside
+        className={`team-rail${railCollapsed ? ' is-collapsed' : ''}`}
+        aria-label="Команда и достижения"
+      >
+        <button
+          type="button"
+          className="team-rail-peek"
+          aria-label="Развернуть награды и рейтинг"
+          aria-expanded={!railCollapsed}
+          onClick={toggleRail}
+          title="Развернуть награды и рейтинг"
+        >
+          <span className="team-rail-beacon" aria-hidden="true">
+            <img
+              src="/achievements/initiative.png"
+              alt=""
+              width={38}
+              height={38}
+            />
+            {data && (
+              <span className="team-rail-award-count">
+                {data.rewards.earned.length}
+              </span>
+            )}
+          </span>
+          <span className="team-rail-peek-label">Награды</span>
+          <span className="team-rail-peek-score">
+            <strong>
+              {data ? data.me.points.toLocaleString('ru-RU') : '—'}
+            </strong>
+            <small>баллов</small>
+          </span>
+          <ChevronLeft size={18} aria-hidden="true" />
+        </button>
         <div className="team-rail-heading">
-          <span className="season-kicker">Команда и достижения</span>
+          <div className="team-rail-heading-line">
+            <span className="season-kicker">Команда и достижения</span>
+            <button
+              type="button"
+              className="team-rail-collapse"
+              aria-label="Свернуть награды и рейтинг"
+              aria-expanded={!railCollapsed}
+              onClick={toggleRail}
+              title="Свернуть панель"
+            >
+              <ChevronRight size={17} aria-hidden="true" />
+            </button>
+          </div>
           <h2>{period}</h2>
         </div>
         {scopeControl}
