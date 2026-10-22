@@ -1044,6 +1044,19 @@ test.describe('core board workflow', () => {
       { data: { role: 'admin' } },
     );
     expect(forbiddenRoleChange.status()).toBe(403);
+    const forbiddenAdminPassword = await page.request.patch(
+      `/api/admin/users/${adminMember.id}`,
+      { data: { password: 'manager-must-not-escalate-123' } },
+    );
+    expect(forbiddenAdminPassword.status()).toBe(403);
+    const adminMemberRow = page.locator('.admin-user-row').filter({
+      has: page.getByText(adminMemberEmail, { exact: true }),
+    });
+    await expect(
+      adminMemberRow.getByRole('button', {
+        name: `Сменить пароль ${adminMemberEmail}`,
+      }),
+    ).toHaveCount(0);
 
     await page.keyboard.press('Escape');
     await signOut(page, managerEmail);

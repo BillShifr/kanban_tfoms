@@ -2388,6 +2388,12 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!target) return 'USER_NOT_FOUND';
+      if (
+        u.role === 'manager' &&
+        target.role !== 'user' &&
+        p.data.password !== undefined
+      )
+        return 'FORBIDDEN';
       if (u.role !== 'manager' && !canManageAccount(u.role, target.role))
         return 'FORBIDDEN';
       if (

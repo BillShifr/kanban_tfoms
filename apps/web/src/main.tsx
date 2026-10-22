@@ -1370,6 +1370,8 @@ function AdminUsersDrawer({
                 isSuperadmin ||
                 isManager ||
                 (currentUser.role === 'admin' && ordinaryUser),
+              canResetPassword =
+                canManageAccount && (!isManager || ordinaryUser),
               canArchive =
                 isSuperadmin || (currentUser.role === 'admin' && ordinaryUser);
             return (
@@ -1457,22 +1459,24 @@ function AdminUsersDrawer({
                               <Pencil size={17} />
                             </ActionIcon>
                           )}
-                          <ActionIcon
-                            variant="subtle"
-                            color="gray"
-                            size="lg"
-                            aria-label={`Сменить пароль ${item.email}`}
-                            disabled={ownAccount}
-                            onClick={() => {
-                              setPasswordTarget(item);
-                              setProfileTarget(null);
-                              setNewPassword('');
-                              setArchiveTarget(null);
-                              closeAccess();
-                            }}
-                          >
-                            <KeyRound size={17} />
-                          </ActionIcon>
+                          {canResetPassword && (
+                            <ActionIcon
+                              variant="subtle"
+                              color="gray"
+                              size="lg"
+                              aria-label={`Сменить пароль ${item.email}`}
+                              disabled={ownAccount}
+                              onClick={() => {
+                                setPasswordTarget(item);
+                                setProfileTarget(null);
+                                setNewPassword('');
+                                setArchiveTarget(null);
+                                closeAccess();
+                              }}
+                            >
+                              <KeyRound size={17} />
+                            </ActionIcon>
+                          )}
                           <ActionIcon
                             variant="subtle"
                             color="red"
