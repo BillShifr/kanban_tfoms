@@ -1282,48 +1282,68 @@ function AdminUsersDrawer({
                 <p>Доступ к отделам и доскам выдаётся отдельно</p>
               </div>
             </div>
-            <TextInput
-              label="Email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.currentTarget.value)}
-              required
-            />
-            <Group grow align="flex-start">
-              <TextInput
-                label="Фамилия"
-                value={lastName}
-                onChange={(event) => setLastName(event.currentTarget.value)}
-                maxLength={80}
-              />
-              <TextInput
-                label="Имя"
-                value={firstName}
-                onChange={(event) => setFirstName(event.currentTarget.value)}
-                maxLength={80}
-              />
-            </Group>
-            <PasswordComposer
-              label="Пароль для входа"
-              value={password}
-              onChange={setPassword}
-            />
-            {isSuperadmin && (
-              <Select
-                label="Роль"
-                value={role}
-                onChange={(value) => setRole(value as AccountRole)}
-                data={assignableRoleOptions}
-                allowDeselect={false}
-              />
-            )}
-            <Button
-              type="submit"
-              leftSection={<Plus size={16} />}
-              loading={busy === 'create'}
-            >
-              Создать пользователя
-            </Button>
+            <section className="admin-user-create-section">
+              <div className="admin-user-create-section-heading">
+                <strong>Данные пользователя</strong>
+                <span>Имя будет отображаться в задачах и комментариях</span>
+              </div>
+              <div className="admin-user-identity-grid">
+                <TextInput
+                  className="admin-user-email"
+                  label="Email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.currentTarget.value)}
+                  required
+                />
+                <TextInput
+                  label="Фамилия"
+                  value={lastName}
+                  onChange={(event) => setLastName(event.currentTarget.value)}
+                  maxLength={80}
+                />
+                <TextInput
+                  label="Имя"
+                  value={firstName}
+                  onChange={(event) => setFirstName(event.currentTarget.value)}
+                  maxLength={80}
+                />
+              </div>
+            </section>
+            <section className="admin-user-create-section">
+              <div className="admin-user-create-section-heading">
+                <strong>Вход и роль</strong>
+                <span>Пароль можно показать и скопировать до сохранения</span>
+              </div>
+              <div
+                className={`admin-user-security-grid${isSuperadmin ? '' : ' is-single'}`}
+              >
+                <PasswordComposer
+                  label="Пароль для входа"
+                  value={password}
+                  onChange={setPassword}
+                />
+                {isSuperadmin && (
+                  <Select
+                    label="Роль"
+                    value={role}
+                    onChange={(value) => setRole(value as AccountRole)}
+                    data={assignableRoleOptions}
+                    allowDeselect={false}
+                  />
+                )}
+              </div>
+            </section>
+            <div className="admin-user-create-actions">
+              <span>Права на отделы и доски настраиваются после создания</span>
+              <Button
+                type="submit"
+                leftSection={<Plus size={16} />}
+                loading={busy === 'create'}
+              >
+                Создать пользователя
+              </Button>
+            </div>
           </form>
         )}
 
@@ -1411,6 +1431,15 @@ function AdminUsersDrawer({
                     )
                   ) : (
                     <Group gap="xs" wrap="wrap" justify="flex-end">
+                      {ordinaryUser && (
+                        <Button
+                          variant="light"
+                          leftSection={<UsersRound size={16} />}
+                          onClick={() => openAccess(item)}
+                        >
+                          Доступ
+                        </Button>
+                      )}
                       {isSuperadmin && (
                         <Select
                           className="admin-role-select"
@@ -1429,15 +1458,6 @@ function AdminUsersDrawer({
                             )
                           }
                         />
-                      )}
-                      {ordinaryUser && (
-                        <Button
-                          variant="light"
-                          leftSection={<UsersRound size={16} />}
-                          onClick={() => openAccess(item)}
-                        >
-                          Доступ
-                        </Button>
                       )}
                       {canManageAccount && (
                         <>
