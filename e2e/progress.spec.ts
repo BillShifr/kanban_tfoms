@@ -99,11 +99,13 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       await expect(peek).toContainText('Награды');
       await expect(peek).toContainText('баллов');
       await expect(workspace).toHaveClass(/team-rail-collapsed/);
-      expect(
-        await workspace.evaluate(
-          (element) => getComputedStyle(element).gridTemplateColumns,
-        ),
-      ).not.toBe(expandedColumns);
+      await expect
+        .poll(() =>
+          workspace.evaluate(
+            (element) => getComputedStyle(element).gridTemplateColumns,
+          ),
+        )
+        .not.toBe(expandedColumns);
       expect(
         await page.evaluate(() =>
           window.localStorage.getItem('kanban.collapse.v1.team-rail'),
