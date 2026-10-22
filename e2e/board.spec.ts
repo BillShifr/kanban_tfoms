@@ -140,12 +140,7 @@ async function selectBoard(page: Page, name: string, departmentName?: string) {
     });
     if (await expandDepartment.isVisible()) await expandDepartment.click();
   }
-  const boardButton = navigation.getByRole('button', { name, exact: true });
-  await expect(boardButton).toBeAttached();
-  await boardButton.evaluate((element) => {
-    element.scrollIntoView({ block: 'center', inline: 'nearest' });
-    element.click();
-  });
+  await clickNavigationControl(navigation, name);
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
 
