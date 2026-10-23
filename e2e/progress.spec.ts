@@ -142,6 +142,23 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await page.locator(isMobile ? '.team-mobile-bar' : '.team-open').click();
     const drawer = page.getByRole('dialog', { name: 'Команда и достижения' });
     await drawer.getByText('Все сотрудники', { exact: true }).first().click();
+    await expect(
+      drawer.getByText('Рейтинг всей организации', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      drawer.getByText(
+        'Учитываются все активные доски и сотрудники, в том числе пока без баллов.',
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      drawer.getByText('Ваш результат среди всех сотрудников', {
+        exact: false,
+      }),
+    ).toBeVisible();
+    await expect(
+      drawer.getByRole('heading', { name: 'Лидеры организации' }),
+    ).toBeVisible();
     await expect(drawer.locator('.leader-list li').first()).toBeVisible();
     await expect(drawer.getByText('Баллы', { exact: true })).toBeVisible();
     const numericStyles = await drawer
@@ -260,6 +277,18 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
     await expect(drawer.locator('[data-podium="1"]').first()).toBeVisible();
     await expect(drawer.locator('.achievement')).toHaveCount(8);
     await drawer.getByText('Доступные доски', { exact: true }).click();
+    await expect(
+      drawer.getByText('Рейтинг доступных досок', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      drawer.getByText(
+        'Учитываются задачи на доступных вам досках и сотрудники с вкладом на них.',
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      drawer.getByRole('heading', { name: 'Лидеры доступных досок' }),
+    ).toBeVisible();
     await expect(drawer.getByText('Пока нет результатов')).toBeVisible();
     await drawer.getByRole('button', { name: /Первый шаг/ }).click();
     const condition = page.getByRole('dialog', { name: 'Условие достижения' });
