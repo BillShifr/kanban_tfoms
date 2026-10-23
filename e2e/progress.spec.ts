@@ -626,10 +626,10 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       name: `Свернуть колонку ${detail.columns[0].name}`,
       exact: true,
     });
-    // dnd-kit briefly suppresses the click immediately following a pointer
-    // drop. Exercise the keyboard path here instead of racing that guard.
-    await firstColumnToggle.focus();
-    await page.keyboard.press('Enter');
+    // Move away from the completed drag before exercising the independent
+    // column control through the same pointer path a desktop user takes.
+    await page.mouse.move(1, 1);
+    await firstColumnToggle.click();
     const folded = page.getByRole('region', { name: 'Свёрнутые колонки' });
     await expect(folded).toHaveCount(1);
     await expect(folded.locator('.column')).toHaveCount(2);
