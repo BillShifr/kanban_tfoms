@@ -2303,17 +2303,18 @@ function KanbanColumn({
           <span className="task-count" aria-label={`Задач: ${tasks.length}`}>
             {tasks.length}
           </span>
+        </div>
+        <div className="column-header-actions">
           {column.isCompletion && (
             <span
               className="completion-column-mark"
-              title="За первое завершение исполнитель получает 10 баллов"
+              role="img"
+              aria-label="Колонка завершения"
+              title="Колонка завершения"
             >
-              <CheckCircle2 size={13} aria-hidden="true" />
-              Завершение · +10
+              <CheckCircle2 size={16} aria-hidden="true" />
             </span>
           )}
-        </div>
-        <div className="column-header-actions">
           <ActionIcon
             id={`column-collapse-${column.id}`}
             variant="subtle"
