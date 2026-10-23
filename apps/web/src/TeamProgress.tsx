@@ -56,6 +56,14 @@ type Profile = { user: Member; bio: string; hasAvatar: boolean };
 type Request = <T>(path: string, options?: RequestInit) => Promise<T>;
 const name = (u: Member) =>
   [u.lastName, u.firstName].filter(Boolean).join(' ') || u.email;
+const plural = (value: number, one: string, few: string, many: string) => {
+  const lastTwo = value % 100,
+    last = value % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+};
 const gameDialogClasses = {
   content: 'team-dialog',
   header: 'team-dialog-header',
@@ -498,17 +506,46 @@ export function TeamProgress({
         timeZone: 'UTC',
       }).format(new Date(`${data.period}-01T00:00:00Z`))
     : 'Текущий месяц';
+  const scopeMeta =
+    scope === 'visible'
+      ? {
+          title: 'Рейтинг доступных досок',
+          description:
+            'Учитываются задачи на доступных вам досках и сотрудники с вкладом на них.',
+          scoreLabel: 'Ваш результат на доступных досках',
+          leadersLabel: 'Лидеры доступных досок',
+          memberLabel: (value: number) =>
+            plural(value, 'участник', 'участника', 'участников'),
+        }
+      : {
+          title: 'Рейтинг всей организации',
+          description:
+            'Учитываются все активные доски и сотрудники, в том числе пока без баллов.',
+          scoreLabel: 'Ваш результат среди всех сотрудников',
+          leadersLabel: 'Лидеры организации',
+          memberLabel: (value: number) =>
+            plural(value, 'сотрудник', 'сотрудника', 'сотрудников'),
+        };
+  const participantsLabel = data
+    ? `${data.participants.toLocaleString('ru-RU')} ${scopeMeta.memberLabel(data.participants)}`
+    : '';
   const scopeControl = (
-    <SegmentedControl
-      fullWidth
-      aria-label="Область рейтинга"
-      value={scope}
-      onChange={(value) => setScope(value as 'visible' | 'global')}
-      data={[
-        { value: 'visible', label: 'Доступные доски' },
-        { value: 'global', label: 'Все сотрудники' },
-      ]}
-    />
+    <div className="team-scope">
+      <SegmentedControl
+        fullWidth
+        aria-label="Область рейтинга"
+        value={scope}
+        onChange={(value) => setScope(value as 'visible' | 'global')}
+        data={[
+          { value: 'visible', label: 'Доступные доски' },
+          { value: 'global', label: 'Все сотрудники' },
+        ]}
+      />
+      <div className="team-scope-explainer" aria-live="polite">
+        <strong>{scopeMeta.title}</strong>
+        <span>{scopeMeta.description}</span>
+      </div>
+    </div>
   );
   const loadState = progress.isError ? (
     <div className="team-load-state">
@@ -706,8 +743,8 @@ export function TeamProgress({
         {loadState}
         {data && (
           <>
-            <section className="team-score" aria-label="Ваш результат">
-              <span>Ваш результат</span>
+            <section className="team-score" aria-label={scopeMeta.scoreLabel}>
+              <span>{scopeMeta.scoreLabel}</span>
               <div className="team-score-number">
                 <strong>{data.me.points.toLocaleString('ru-RU')}</strong>
                 <span>баллов</span>
@@ -724,7 +761,7 @@ export function TeamProgress({
               </div>
               <p>
                 {data.me.rank
-                  ? `Место ${data.me.rank} из ${data.participants}`
+                  ? `Место ${data.me.rank} из ${participantsLabel}`
                   : 'Место в рейтинге: —'}
               </p>
             </section>
@@ -764,8 +801,8 @@ export function TeamProgress({
             </button>
             <section className="team-leaders">
               <div className="team-section-title">
-                <h3>Лидеры месяца</h3>
-                <span>{data.participants} участников</span>
+                <h3>{scopeMeta.leadersLabel}</h3>
+                <span>{participantsLabel}</span>
               </div>
               {!data.leaders.length && (
                 <p className="team-empty">Пока нет результатов</p>
@@ -800,7 +837,7 @@ export function TeamProgress({
           <strong>Команда и достижения</strong>
           <small>
             {data
-              ? `${data.me.points} баллов за месяц · ${data.scope}`
+              ? `${data.me.points} баллов за месяц · ${scopeMeta.title}`
               : 'Посмотреть рейтинг и условия'}
           </small>
         </span>
@@ -824,11 +861,14 @@ export function TeamProgress({
           <>
             <div className="team-personal-strip">
               <strong>
-                Ваш результат: {data.me.points.toLocaleString('ru-RU')} баллов
+                {scopeMeta.scoreLabel}: {data.me.points.toLocaleString('ru-RU')}{' '}
+                баллов
               </strong>
               <span>
-                {data.me.rank ? `Место ${data.me.rank}` : 'Пока без места'} ·{' '}
-                {period}
+                {data.me.rank
+                  ? `Место ${data.me.rank} из ${participantsLabel}`
+                  : 'Пока без места'}{' '}
+                · {period}
               </span>
             </div>
             <section className="team-collection">
@@ -853,8 +893,8 @@ export function TeamProgress({
             </section>
             <section className="team-leaders">
               <div className="team-section-title">
-                <h2>Рейтинг месяца</h2>
-                <span>{data.participants} участников</span>
+                <h2>{scopeMeta.leadersLabel}</h2>
+                <span>{participantsLabel}</span>
               </div>
               {!progress.data.leaders.length && (
                 <Text>Пока нет результатов</Text>
@@ -872,8 +912,8 @@ export function TeamProgress({
               </p>
               <p>
                 +2 автору за создание, +10 назначенному исполнителю за первое
-                завершение. Завершением считается перенос в последнюю колонку
-                доски.
+                завершение. Завершением считается перенос в выбранную в
+                настройках колонку завершения.
               </p>
               <p>
                 Повторное закрытие не даёт новых баллов. При возврате в работу
