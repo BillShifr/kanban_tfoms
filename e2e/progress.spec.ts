@@ -412,6 +412,30 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       'Баллы добавлены в рейтинг месяца',
     );
     await expect(page.locator('.points-celebration')).toHaveCount(0);
+    const postponedResponse = await page.request.post(
+      `/api/boards/${board.id}/columns`,
+      { data: { name: `Отложено ${suffix}` } },
+    );
+    expect(postponedResponse.status()).toBe(201);
+    const postponed = (await postponedResponse.json()).column;
+    expect(
+      (
+        await page.request.post(
+          `/api/boards/${board.id}/tasks/${ownTaskId}/move`,
+          { data: { columnId: postponed.id } },
+        )
+      ).status(),
+    ).toBe(200);
+    const postponedScore = await (
+      await page.request.get('/api/progress?scope=visible')
+    ).json();
+    expect(postponedScore.me).toMatchObject({
+      points: 2,
+      created: 1,
+      completed: 0,
+      monthCreated: 1,
+      monthCompleted: 0,
+    });
     for (const column of [
       detail.columns.at(-1),
       detail.columns[0],
@@ -439,6 +463,13 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       monthCompleted: 1,
       rank: 1,
     });
+    expect(
+      (
+        await page.request.post(
+          `/api/boards/${board.id}/columns/${postponed.id}/archive`,
+        )
+      ).status(),
+    ).toBe(204);
     expect(scored.rewards.frames).toContain('trail');
     expect(scored.rewards.frames).not.toContain('nova');
     expect(
@@ -586,8 +617,8 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
             await page.request.get(`/api/boards/${board.id}`)
           ).json();
           return updated.columns
-            .at(-1)
-            .tasks.some((task: { id: string }) => task.id === taskId);
+            .find((column: { name: string }) => column.name === lastColumn)
+            ?.tasks.some((task: { id: string }) => task.id === taskId);
         })
         .toBe(true);
     }
@@ -595,10 +626,10 @@ test('profile and both leaderboard scopes preserve board privacy', async ({
       name: `Свернуть колонку ${detail.columns[0].name}`,
       exact: true,
     });
-    // dnd-kit briefly suppresses the click immediately following a pointer
-    // drop. Exercise the keyboard path here instead of racing that guard.
-    await firstColumnToggle.focus();
-    await page.keyboard.press('Enter');
+    // Move away from the completed drag before exercising the independent
+    // column control through the same pointer path a desktop user takes.
+    await page.mouse.move(1, 1);
+    await firstColumnToggle.click();
     const folded = page.getByRole('region', { name: 'Свёрнутые колонки' });
     await expect(folded).toHaveCount(1);
     await expect(folded.locator('.column')).toHaveCount(2);
