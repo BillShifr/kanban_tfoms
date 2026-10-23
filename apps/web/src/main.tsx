@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, FormEvent } from 'react';
+import type { CSSProperties, FormEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import {
@@ -17,6 +17,7 @@ import {
 import type { CollisionDetection, DragEndEvent } from '@dnd-kit/core';
 import {
   SortableContext,
+  arrayMove,
   sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
@@ -39,6 +40,7 @@ import {
   NumberInput,
   PasswordInput,
   Popover,
+  Radio,
   Select,
   Stack,
   Skeleton,
@@ -63,6 +65,7 @@ import {
   ArrowRight,
   CalendarClock,
   Check,
+  CheckCircle2,
   ChevronLeft,
   ChevronDown,
   ChevronUp,
@@ -176,7 +179,13 @@ type Task = {
   timeSeconds?: number;
   attachments?: Attachment[];
 };
-type Column = { id: string; name: string; tasks: Task[] };
+type Column = {
+  id: string;
+  name: string;
+  position: string;
+  isCompletion: boolean;
+  tasks: Task[];
+};
 type ArchivedColumn = { id: string; name: string; archivedAt: string };
 type Payload = {
   board: Board;
@@ -260,6 +269,9 @@ const ru: Record<string, string> = {
   TIMER_ALREADY_RUNNING: 'Сначала остановите текущий таймер',
   TASK_NOT_FOUND: 'Задача не найдена',
   COLUMN_HAS_TASKS: 'Сначала переместите из колонки все задачи',
+  COMPLETION_COLUMN:
+    'Сначала назначьте другую колонку этапом завершения задачи',
+  COLUMN_ORDER_STALE: 'Состав колонок изменился. Обновите порядок ещё раз',
   LAST_COLUMN: 'На доске должна остаться хотя бы одна колонка',
   DEPARTMENT_NAME_TAKEN: 'Отдел с таким названием уже существует',
   DEPARTMENT_NOT_FOUND: 'Отдел не найден',
@@ -2291,6 +2303,15 @@ function KanbanColumn({
           <span className="task-count" aria-label={`Задач: ${tasks.length}`}>
             {tasks.length}
           </span>
+          {column.isCompletion && (
+            <span
+              className="completion-column-mark"
+              title="За первое завершение исполнитель получает 10 баллов"
+            >
+              <CheckCircle2 size={13} aria-hidden="true" />
+              Завершение · +10
+            </span>
+          )}
         </div>
         <div className="column-header-actions">
           <ActionIcon
@@ -2331,7 +2352,7 @@ function KanbanColumn({
                 <Menu.Item
                   color="red"
                   leftSection={<Archive size={15} />}
-                  disabled={hasActiveTasks}
+                  disabled={hasActiveTasks || column.isCompletion}
                   onClick={() => {
                     setEditing(false);
                     setConfirmArchive(true);
@@ -2339,8 +2360,12 @@ function KanbanColumn({
                 >
                   Архивировать колонку
                 </Menu.Item>
-                {hasActiveTasks && (
-                  <Menu.Label>Сначала переместите задачи</Menu.Label>
+                {(hasActiveTasks || column.isCompletion) && (
+                  <Menu.Label>
+                    {column.isCompletion
+                      ? 'Сначала выберите другой этап завершения'
+                      : 'Сначала переместите задачи'}
+                  </Menu.Label>
                 )}
               </Menu.Dropdown>
             </Menu>
@@ -3708,6 +3733,51 @@ function TimeView({ data, close }: { data: Payload; close: () => void }) {
     </MantineDrawer>
   );
 }
+function SortableSettingsColumn({
+  column,
+  index,
+  disabled,
+  children,
+}: {
+  column: Column;
+  index: number;
+  disabled: boolean;
+  children: ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: column.id, disabled });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`settings-column-item${column.isCompletion ? ' is-completion' : ''}${isDragging ? ' is-dragging' : ''}`}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+    >
+      <div className="settings-column-order">
+        <ActionIcon
+          ref={setActivatorNodeRef}
+          variant="subtle"
+          color="gray"
+          size="lg"
+          aria-label={`Изменить позицию колонки ${column.name}. Сейчас ${index + 1}`}
+          title="Перетащите или используйте клавиатуру"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={18} />
+        </ActionIcon>
+        <span aria-label={`Позиция ${index + 1}`}>{index + 1}</span>
+      </div>
+      <div className="settings-column-content">{children}</div>
+    </div>
+  );
+}
 function Settings({
   data,
   currentUser,
@@ -3748,7 +3818,19 @@ function Settings({
       null,
     ),
     [pendingBoardArchive, setPendingBoardArchive] = useState(false),
-    [error, setError] = useState('');
+    [orderedColumns, setOrderedColumns] = useState(data.columns),
+    [columnOrderBusy, setColumnOrderBusy] = useState(false),
+    [error, setError] = useState(''),
+    columnSensors = useSensors(
+      useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+      useSensor(TouchSensor, {
+        activationConstraint: { delay: 180, tolerance: 6 },
+      }),
+      useSensor(KeyboardSensor, {
+        coordinateGetter: sortableKeyboardCoordinates,
+      }),
+    );
+  useEffect(() => setOrderedColumns(data.columns), [data.columns]);
   const returnToSettingsArchive = (columnId: string) =>
     window.requestAnimationFrame(() =>
       document.getElementById(`settings-archive-${columnId}`)?.focus(),
@@ -3763,6 +3845,28 @@ function Settings({
       setError(err(e));
       return false;
     }
+  };
+  const reorderColumns = async (event: DragEndEvent) => {
+    if (!event.over || event.active.id === event.over.id || columnOrderBusy)
+      return;
+    const from = orderedColumns.findIndex(
+        (column) => column.id === event.active.id,
+      ),
+      to = orderedColumns.findIndex((column) => column.id === event.over?.id);
+    if (from < 0 || to < 0) return;
+    const next = arrayMove(orderedColumns, from, to);
+    setOrderedColumns(next);
+    setColumnOrderBusy(true);
+    const saved = await run(() =>
+      api(`/boards/${data.board.id}/columns/order`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          columnIds: next.map((column) => column.id),
+        }),
+      }),
+    );
+    if (!saved) setOrderedColumns(data.columns);
+    setColumnOrderBusy(false);
   };
   return (
     <MantineDrawer
@@ -3910,108 +4014,173 @@ function Settings({
                 <p>Этапы рабочего процесса слева направо</p>
               </div>
             </div>
-            {data.columns.map((column) => {
-              const hasTasks = column.tasks.some((task) => !task.archivedAt);
-              return (
-                <div className="settings-column-item" key={column.id}>
-                  <form
-                    className="settings-row"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      const name = String(
-                        new FormData(event.currentTarget).get('name') ?? '',
-                      ).trim();
-                      if (name)
-                        void run(() =>
-                          api(`/boards/${data.board.id}/columns/${column.id}`, {
-                            method: 'PATCH',
-                            body: JSON.stringify({ name }),
-                          }),
-                        );
-                    }}
-                  >
-                    <TextInput
-                      name="name"
-                      aria-label={`Название колонки ${column.name}`}
-                      defaultValue={column.name}
-                    />
-                    <ActionIcon
-                      type="submit"
-                      variant="light"
-                      color="blue"
-                      size="lg"
-                      aria-label={`Сохранить колонку ${column.name}`}
-                    >
-                      <Check size={17} />
-                    </ActionIcon>
-                    <ActionIcon
-                      id={`settings-archive-${column.id}`}
-                      type="button"
-                      variant="subtle"
-                      color="red"
-                      size="lg"
-                      disabled={hasTasks}
-                      title={
-                        hasTasks
-                          ? 'Сначала переместите задачи'
-                          : 'Архивировать колонку'
-                      }
-                      aria-label={`Архивировать колонку ${column.name}`}
-                      onClick={() => setPendingColumnArchive(column.id)}
-                    >
-                      <Archive size={17} />
-                    </ActionIcon>
-                  </form>
-                  {hasTasks && (
-                    <Text size="xs" c="dimmed">
-                      Чтобы архивировать колонку, сначала переместите задачи
-                    </Text>
-                  )}
-                  {pendingColumnArchive === column.id && (
-                    <div
-                      className="settings-column-confirm"
-                      role="alertdialog"
-                      aria-labelledby={`settings-archive-title-${column.id}`}
-                    >
-                      <strong id={`settings-archive-title-${column.id}`}>
-                        Архивировать пустую колонку «{column.name}»?
-                      </strong>
-                      <Group gap="xs">
-                        <Button
-                          size="compact-sm"
-                          color="red"
-                          variant="light"
-                          onClick={() =>
-                            void run(async () => {
-                              await api(
-                                `/boards/${data.board.id}/columns/${column.id}/archive`,
-                                { method: 'POST' },
+            <div className="settings-workflow-note">
+              <GripVertical size={20} aria-hidden="true" />
+              <div>
+                <strong>Порядок этапов</strong>
+                <span>
+                  Перетащите строки за маркер. Номер соответствует расположению
+                  колонки на доске.
+                </span>
+              </div>
+            </div>
+            <DndContext
+              sensors={columnSensors}
+              collisionDetection={closestCorners}
+              onDragEnd={(event) => void reorderColumns(event)}
+            >
+              <SortableContext
+                items={orderedColumns.map((column) => column.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="settings-columns-list">
+                  {orderedColumns.map((column, index) => {
+                    const hasTasks = column.tasks.some(
+                      (task) => !task.archivedAt,
+                    );
+                    return (
+                      <SortableSettingsColumn
+                        column={column}
+                        index={index}
+                        disabled={columnOrderBusy}
+                        key={column.id}
+                      >
+                        <form
+                          className="settings-row"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            const name = String(
+                              new FormData(event.currentTarget).get('name') ??
+                                '',
+                            ).trim();
+                            if (name)
+                              void run(() =>
+                                api(
+                                  `/boards/${data.board.id}/columns/${column.id}`,
+                                  {
+                                    method: 'PATCH',
+                                    body: JSON.stringify({ name }),
+                                  },
+                                ),
                               );
-                              setPendingColumnArchive(null);
-                              await archivedColumns.refetch();
-                            })
-                          }
-                        >
-                          Архивировать
-                        </Button>
-                        <Button
-                          autoFocus
-                          size="compact-sm"
-                          variant="subtle"
-                          color="gray"
-                          onClick={() => {
-                            setPendingColumnArchive(null);
-                            returnToSettingsArchive(column.id);
                           }}
                         >
-                          Отмена
-                        </Button>
-                      </Group>
-                    </div>
-                  )}
+                          <TextInput
+                            name="name"
+                            aria-label={`Название колонки ${column.name}`}
+                            defaultValue={column.name}
+                          />
+                          <ActionIcon
+                            type="submit"
+                            variant="light"
+                            color="blue"
+                            size="lg"
+                            aria-label={`Сохранить колонку ${column.name}`}
+                          >
+                            <Check size={17} />
+                          </ActionIcon>
+                          <ActionIcon
+                            id={`settings-archive-${column.id}`}
+                            type="button"
+                            variant="subtle"
+                            color="red"
+                            size="lg"
+                            disabled={hasTasks || column.isCompletion}
+                            title={
+                              column.isCompletion
+                                ? 'Сначала выберите другой этап завершения'
+                                : hasTasks
+                                  ? 'Сначала переместите задачи'
+                                  : 'Архивировать колонку'
+                            }
+                            aria-label={`Архивировать колонку ${column.name}`}
+                            onClick={() => setPendingColumnArchive(column.id)}
+                          >
+                            <Archive size={17} />
+                          </ActionIcon>
+                        </form>
+                        <Radio
+                          className="completion-column-choice"
+                          checked={column.isCompletion}
+                          label={
+                            column.isCompletion
+                              ? 'Этап завершения · +10 баллов'
+                              : 'Считать задачу выполненной на этом этапе'
+                          }
+                          description={
+                            column.isCompletion
+                              ? 'Первое попадание задачи сюда приносит исполнителю 10 баллов.'
+                              : undefined
+                          }
+                          onChange={() => {
+                            if (column.isCompletion) return;
+                            void run(() =>
+                              api(
+                                `/boards/${data.board.id}/columns/completion`,
+                                {
+                                  method: 'PUT',
+                                  body: JSON.stringify({
+                                    columnId: column.id,
+                                  }),
+                                },
+                              ),
+                            );
+                          }}
+                        />
+                        {hasTasks && !column.isCompletion && (
+                          <Text size="xs" c="dimmed">
+                            Чтобы архивировать колонку, сначала переместите
+                            задачи
+                          </Text>
+                        )}
+                        {pendingColumnArchive === column.id && (
+                          <div
+                            className="settings-column-confirm"
+                            role="alertdialog"
+                            aria-labelledby={`settings-archive-title-${column.id}`}
+                          >
+                            <strong id={`settings-archive-title-${column.id}`}>
+                              Архивировать пустую колонку «{column.name}»?
+                            </strong>
+                            <Group gap="xs">
+                              <Button
+                                size="compact-sm"
+                                color="red"
+                                variant="light"
+                                onClick={() =>
+                                  void run(async () => {
+                                    await api(
+                                      `/boards/${data.board.id}/columns/${column.id}/archive`,
+                                      { method: 'POST' },
+                                    );
+                                    setPendingColumnArchive(null);
+                                    await archivedColumns.refetch();
+                                  })
+                                }
+                              >
+                                Архивировать
+                              </Button>
+                              <Button
+                                autoFocus
+                                size="compact-sm"
+                                variant="subtle"
+                                color="gray"
+                                onClick={() => {
+                                  setPendingColumnArchive(null);
+                                  returnToSettingsArchive(column.id);
+                                }}
+                              >
+                                Отмена
+                              </Button>
+                            </Group>
+                          </div>
+                        )}
+                      </SortableSettingsColumn>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </SortableContext>
+            </DndContext>
             <form
               className="settings-create-row"
               onSubmit={(event) => {

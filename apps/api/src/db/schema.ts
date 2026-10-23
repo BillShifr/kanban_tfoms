@@ -10,6 +10,7 @@ import {
   index,
   uniqueIndex,
   check,
+  boolean,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 export const userRole = pgEnum('user_role', [
@@ -176,6 +177,7 @@ export const columns = pgTable(
       .references(() => boards.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     position: numeric('position').notNull(),
+    isCompletion: boolean('is_completion').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -183,7 +185,14 @@ export const columns = pgTable(
   },
   (t) => [
     index('columns_board_position_idx').on(t.boardId, t.position),
+    uniqueIndex('columns_one_active_completion_idx')
+      .on(t.boardId)
+      .where(sql`${t.archivedAt} IS NULL AND ${t.isCompletion}`),
     check('columns_position_positive', sql`${t.position} > 0`),
+    check(
+      'columns_archived_not_completion',
+      sql`${t.archivedAt} IS NULL OR NOT ${t.isCompletion}`,
+    ),
   ],
 );
 export const topics = pgTable(

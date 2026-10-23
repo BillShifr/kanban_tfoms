@@ -120,7 +120,7 @@ database('PostgreSQL invariants', () => {
     }
   });
 
-  it.each(['0014_', '0015_', '0016_', '0018_', '0020_'])(
+  it.each(['0014_', '0015_', '0016_', '0018_', '0020_', '0022_'])(
     'upgrades a populated schema before %s without losing tasks',
     async (cutoff) => {
       const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -206,6 +206,20 @@ database('PostgreSQL invariants', () => {
               [crypto.randomUUID(), legacyTask, legacyUser],
             );
           }
+          if (cutoff === '0022_') {
+            const completionColumn = crypto.randomUUID();
+            const archivedColumn = crypto.randomUUID();
+            await legacyClient.query(
+              `insert into columns(id,board_id,name,position,archived_at)
+               values ($1,$2,'Legacy completion',2,null),
+                      ($3,$2,'Legacy archived',99,now())`,
+              [completionColumn, legacyBoard, archivedColumn],
+            );
+            await legacyClient.query(
+              `update tasks set column_id=$2 where id=$1`,
+              [legacyTask, completionColumn],
+            );
+          }
         } finally {
           legacyClient.release();
         }
@@ -218,6 +232,19 @@ database('PostgreSQL invariants', () => {
           ['Legacy task'],
         );
         expect(upgraded.rows).toEqual([{ title: 'Legacy task' }]);
+        const completionColumns = await legacyPool.query<{
+          name: string;
+          isCompletion: boolean;
+        }>(
+          `select name,is_completion as "isCompletion"
+           from columns where is_completion order by name`,
+        );
+        expect(completionColumns.rows).toEqual([
+          {
+            name: cutoff === '0022_' ? 'Legacy completion' : 'Legacy column',
+            isCompletion: true,
+          },
+        ]);
         const contributions = await legacyPool.query<{
           kind: string;
           points: number;
@@ -664,6 +691,44 @@ database('PostgreSQL invariants', () => {
         )
       ).rowCount,
     ).toBe(0);
+  });
+
+  it('allows only one active completion column and keeps it active', async () => {
+    const otherColumn = crypto.randomUUID();
+    const expectColumnConstraint = async (
+      statement: string,
+      values: unknown[],
+      code: string,
+    ) => {
+      await client.query('savepoint column_workflow_constraint');
+      try {
+        await client.query(statement, values);
+        throw new Error('Expected column workflow constraint to reject write');
+      } catch (error) {
+        expect(error).toMatchObject({ code });
+      } finally {
+        await client.query('rollback to savepoint column_workflow_constraint');
+        await client.query('release savepoint column_workflow_constraint');
+      }
+    };
+    await client.query(`update columns set is_completion=true where id=$1`, [
+      columnA,
+    ]);
+    await client.query(
+      `insert into columns(id,board_id,name,position)
+       values ($1,$2,'Later stage',2)`,
+      [otherColumn, boardA],
+    );
+    await expectColumnConstraint(
+      `update columns set is_completion=true where id=$1`,
+      [otherColumn],
+      '23505',
+    );
+    await expectColumnConstraint(
+      `update columns set archived_at=now() where id=$1`,
+      [columnA],
+      '23514',
+    );
   });
 
   it('rejects simultaneous user and typed-name assignees', async () => {

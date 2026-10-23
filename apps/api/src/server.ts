@@ -207,6 +207,18 @@ const moveInput = z
     beforeTaskId: z.string().uuid().nullable().optional(),
   })
   .strict();
+const columnOrderInput = z
+  .object({
+    columnIds: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(100)
+      .refine((value) => new Set(value).size === value.length),
+  })
+  .strict();
+const completionColumnInput = z
+  .object({ columnId: z.string().uuid() })
+  .strict();
 const taskCommentInput = z
   .object({ body: z.string().trim().min(1).max(4000) })
   .strict();
@@ -1124,6 +1136,7 @@ export async function buildApp() {
           boardId: board.id,
           name,
           position: String(i + 1),
+          isCompletion: i === defaultColumns.length - 1,
         })),
       );
       await tx.insert(topics).values({
@@ -1174,6 +1187,7 @@ export async function buildApp() {
           id: columns.id,
           name: columns.name,
           position: columns.position,
+          isCompletion: columns.isCompletion,
         })
         .from(columns)
         .where(and(eq(columns.boardId, p.data), isNull(columns.archivedAt)))
@@ -1261,7 +1275,10 @@ export async function buildApp() {
       );
       const column = (
         await tx
-          .select({ id: columns.id })
+          .select({
+            id: columns.id,
+            isCompletion: columns.isCompletion,
+          })
           .from(columns)
           .where(
             and(
@@ -1295,6 +1312,7 @@ export async function buildApp() {
         dueAt: p.data.dueAt,
         estimatedMinutes: p.data.estimatedMinutes,
         position: String(Number(max) + 1),
+        completedAt: column.isCompletion ? new Date() : null,
       };
       await tx.insert(tasks).values(task);
       await tx.insert(taskEvents).values({
@@ -1410,7 +1428,11 @@ export async function buildApp() {
       if (!task) return 'TASK_NOT_FOUND';
       const target = (
         await tx
-          .select({ id: columns.id, name: columns.name })
+          .select({
+            id: columns.id,
+            name: columns.name,
+            isCompletion: columns.isCompletion,
+          })
           .from(columns)
           .where(
             and(
@@ -1422,14 +1444,6 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!target) return 'COLUMN_NOT_FOUND';
-      const terminalColumn = (
-        await tx
-          .select({ id: columns.id })
-          .from(columns)
-          .where(and(eq(columns.boardId, b.data), isNull(columns.archivedAt)))
-          .orderBy(desc(columns.position))
-          .limit(1)
-      )[0];
       const sourceColumn = (
         await tx
           .select({ id: columns.id, name: columns.name })
@@ -1482,7 +1496,7 @@ export async function buildApp() {
             completedAt:
               x.id !== task.id
                 ? undefined
-                : terminalColumn?.id === target.id
+                : target.isCompletion
                   ? (task.completedAt ?? now)
                   : null,
           })
@@ -2972,11 +2986,100 @@ export async function buildApp() {
           boardId: b.data,
           name: p.data.name,
           position: String(Number(max) + 1),
+          isCompletion: false,
         };
       await tx.insert(columns).values(created);
       return created;
     });
     return reply.code(201).send({ column });
+  });
+  app.put('/boards/:boardId/columns/order', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      p = columnOrderInput.safeParse(r.body);
+    if (!u) return;
+    if (!b.success || !(await member(b.data, u.id)))
+      return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const reordered = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select id from boards where id = ${b.data} for update`,
+      );
+      const active = await tx
+        .select({ id: columns.id })
+        .from(columns)
+        .where(and(eq(columns.boardId, b.data), isNull(columns.archivedAt)));
+      if (
+        active.length !== p.data.columnIds.length ||
+        active.some((column) => !p.data.columnIds.includes(column.id))
+      )
+        return false;
+      for (const [index, columnId] of p.data.columnIds.entries())
+        await tx
+          .update(columns)
+          .set({ position: String(index + 1) })
+          .where(and(eq(columns.id, columnId), eq(columns.boardId, b.data)));
+      return true;
+    });
+    if (!reordered) return reply.code(409).send({ code: 'COLUMN_ORDER_STALE' });
+    return reply.code(204).send();
+  });
+  app.put('/boards/:boardId/columns/completion', async (r, reply) => {
+    const u = await user(r, reply),
+      b = id(r, 'boardId'),
+      p = completionColumnInput.safeParse(r.body);
+    if (!u) return;
+    if (!b.success || !(await member(b.data, u.id)))
+      return reply.code(404).send({ code: 'BOARD_NOT_FOUND' });
+    if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+    const changed = await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select id from boards where id = ${b.data} for update`,
+      );
+      const target = (
+        await tx
+          .select({ id: columns.id, isCompletion: columns.isCompletion })
+          .from(columns)
+          .where(
+            and(
+              eq(columns.id, p.data.columnId),
+              eq(columns.boardId, b.data),
+              isNull(columns.archivedAt),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!target) return false;
+      if (target.isCompletion) return true;
+      await tx
+        .update(columns)
+        .set({ isCompletion: false })
+        .where(
+          and(eq(columns.boardId, b.data), eq(columns.isCompletion, true)),
+        );
+      await tx
+        .update(columns)
+        .set({ isCompletion: true })
+        .where(eq(columns.id, target.id));
+      const now = new Date();
+      await tx.execute(sql`
+        update tasks
+        set completed_at = case
+              when column_id = ${target.id} then coalesce(completed_at, ${now})
+              else null
+            end,
+            updated_at = ${now}
+        where board_id = ${b.data}
+          and archived_at is null
+          and completed_at is distinct from case
+            when column_id = ${target.id} then coalesce(completed_at, ${now})
+            else null
+          end
+      `);
+      return true;
+    });
+    if (!changed) return reply.code(404).send({ code: 'COLUMN_NOT_FOUND' });
+    return reply.code(204).send();
   });
   app.patch('/boards/:boardId/columns/:columnId', async (r, reply) => {
     const u = await user(r, reply),
@@ -3014,7 +3117,10 @@ export async function buildApp() {
       );
       const target = (
         await tx
-          .select({ id: columns.id })
+          .select({
+            id: columns.id,
+            isCompletion: columns.isCompletion,
+          })
           .from(columns)
           .where(
             and(
@@ -3026,6 +3132,7 @@ export async function buildApp() {
           .limit(1)
       )[0];
       if (!target) return 'COLUMN_NOT_FOUND';
+      if (target.isCompletion) return 'COMPLETION_COLUMN';
       if (
         (
           await tx

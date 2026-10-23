@@ -593,6 +593,134 @@ test.describe('core board workflow', () => {
     ).toBeVisible();
   });
 
+  test('orders columns in settings without changing the completion stage', async ({
+    page,
+    isMobile,
+  }) => {
+    await signIn(page);
+    const boardName = await createBoardForTest(page);
+    const boardsResponse = await page.request.get('/api/boards');
+    const boardId = (
+      (await boardsResponse.json()) as { boards: BoardSummary[] }
+    ).boards.find((board) => board.name === boardName)!.id;
+    const before = (await (
+      await page.request.get(`/api/boards/${boardId}`)
+    ).json()) as {
+      columns: Array<{
+        id: string;
+        name: string;
+        isCompletion: boolean;
+      }>;
+    };
+    const completion = before.columns.find((column) => column.isCompletion)!;
+    const postponedName = uniqueName('Отложено');
+
+    await page.getByRole('button', { name: 'Добавить колонку' }).click();
+    await page.getByLabel('Название новой колонки').fill(postponedName);
+    await page.getByRole('button', { name: 'Создать колонку' }).click();
+    await expect(
+      columnByName(page, completion.name).locator('.completion-column-mark'),
+    ).toContainText('Завершение · +10');
+    await expect(
+      columnByName(page, postponedName).locator('.completion-column-mark'),
+    ).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Настроить доску' }).click();
+    await page.getByRole('tab', { name: 'Колонки' }).click();
+    const handle = page.getByRole('button', {
+      name: `Изменить позицию колонки ${postponedName}. Сейчас 4`,
+    });
+    await expect(handle).toBeVisible();
+    await expect(page.getByLabel('Позиция 1')).toBeVisible();
+    await expect(page.getByLabel('Позиция 4')).toBeVisible();
+    await expect(
+      page.getByText('Этап завершения · +10 баллов', { exact: true }),
+    ).toBeVisible();
+
+    const postponedRow = page.locator('.settings-column-item').filter({
+      has: page.getByLabel(`Название колонки ${postponedName}`),
+    });
+    await postponedRow
+      .getByLabel('Считать задачу выполненной на этом этапе')
+      .click();
+    await expect
+      .poll(async () => {
+        const detail = await (
+          await page.request.get(`/api/boards/${boardId}`)
+        ).json();
+        return detail.columns
+          .filter((column: { isCompletion: boolean }) => column.isCompletion)
+          .map((column: { name: string }) => column.name);
+      })
+      .toEqual([postponedName]);
+
+    const desiredOrder = [
+      before.columns[0]!.id,
+      (
+        await (await page.request.get(`/api/boards/${boardId}`)).json()
+      ).columns.find(
+        (column: { name: string }) => column.name === postponedName,
+      ).id,
+      before.columns[1]!.id,
+      completion.id,
+    ];
+    if (isMobile) {
+      const response = await page.request.put(
+        `/api/boards/${boardId}/columns/order`,
+        { data: { columnIds: desiredOrder } },
+      );
+      expect(response.status()).toBe(204);
+    } else {
+      const targetHandle = page.getByRole('button', {
+        name: `Изменить позицию колонки ${before.columns[1]!.name}. Сейчас 2`,
+      });
+      const sourceBox = await handle.boundingBox();
+      const targetBox = await targetHandle.boundingBox();
+      expect(sourceBox).not.toBeNull();
+      expect(targetBox).not.toBeNull();
+      await page.mouse.move(
+        sourceBox!.x + sourceBox!.width / 2,
+        sourceBox!.y + sourceBox!.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.move(sourceBox!.x - 8, sourceBox!.y - 8, { steps: 3 });
+      await page.mouse.move(
+        targetBox!.x + targetBox!.width / 2,
+        targetBox!.y + targetBox!.height / 2,
+        { steps: 12 },
+      );
+      await page.mouse.up();
+    }
+
+    await expect
+      .poll(async () => {
+        const detail = await (
+          await page.request.get(`/api/boards/${boardId}`)
+        ).json();
+        return detail.columns.map(
+          (column: { name: string; isCompletion: boolean }) => ({
+            name: column.name,
+            isCompletion: column.isCompletion,
+          }),
+        );
+      })
+      .toEqual([
+        {
+          name: before.columns[0]!.name,
+          isCompletion: before.columns[0]!.isCompletion,
+        },
+        { name: postponedName, isCompletion: true },
+        {
+          name: before.columns[1]!.name,
+          isCompletion: before.columns[1]!.isCompletion,
+        },
+        {
+          name: completion.name,
+          isCompletion: false,
+        },
+      ]);
+  });
+
   test('archives and restores a board from the global archive', async ({
     page,
   }) => {
