@@ -619,8 +619,11 @@ test.describe('core board workflow', () => {
     await page.getByLabel('Название новой колонки').fill(postponedName);
     await page.getByRole('button', { name: 'Создать колонку' }).click();
     await expect(
+      columnByName(page, completion.name).getByLabel('Колонка завершения'),
+    ).toBeVisible();
+    await expect(
       columnByName(page, completion.name).locator('.completion-column-mark'),
-    ).toContainText('Завершение · +10');
+    ).toHaveText('');
     await expect(
       columnByName(page, postponedName).locator('.completion-column-mark'),
     ).toHaveCount(0);

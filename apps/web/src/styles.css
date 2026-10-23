@@ -582,19 +582,13 @@ a {
   overflow-wrap: anywhere;
 }
 .column > header .completion-column-mark {
-  min-width: 0;
-  padding: 3px 7px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  border: 1px solid color-mix(in srgb, #16946a 32%, var(--app-border));
-  border-radius: 999px;
-  background: color-mix(in srgb, #16946a 9%, var(--app-canvas));
+  justify-content: center;
   color: color-mix(in srgb, #087653 82%, var(--app-text));
-  font-size: 10px;
-  font-weight: 750;
-  line-height: 1.2;
-  white-space: nowrap;
 }
 [data-mantine-color-scheme='dark'] .column > header .completion-column-mark {
   color: #7ee2bd;
