@@ -366,6 +366,27 @@ export const taskCommentUnread = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.commentId] })],
 );
+export const taskAcknowledgements = pgTable(
+  'task_acknowledgements',
+  {
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.taskId, t.userId] }),
+    index('task_acknowledgements_task_recent_idx').on(
+      t.taskId,
+      t.acknowledgedAt.desc(),
+    ),
+  ],
+);
 export const attachments = pgTable(
   'attachments',
   {
