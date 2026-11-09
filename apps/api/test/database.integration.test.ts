@@ -120,7 +120,7 @@ database('PostgreSQL invariants', () => {
     }
   });
 
-  it.each(['0014_', '0015_', '0016_', '0018_', '0020_', '0022_'])(
+  it.each(['0014_', '0015_', '0016_', '0018_', '0020_', '0022_', '0023_'])(
     'upgrades a populated schema before %s without losing tasks',
     async (cutoff) => {
       const schema = `migration_upgrade_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -191,6 +191,12 @@ database('PostgreSQL invariants', () => {
            values ($1,$2,'Legacy column',1)`,
             [legacyColumn, legacyBoard],
           );
+          if (cutoff === '0023_') {
+            await legacyClient.query(
+              'update columns set is_completion=true where id=$1',
+              [legacyColumn],
+            );
+          }
           await legacyClient.query(
             `insert into tasks(
               id,board_id,column_id,title,author_id,assignee_id,position,created_at,completed_at
@@ -286,6 +292,9 @@ database('PostgreSQL invariants', () => {
         expect(
           (await legacyPool.query('select * from task_comment_unread')).rows,
         ).toEqual([]);
+        expect(
+          (await legacyPool.query('select * from task_acknowledgements')).rows,
+        ).toEqual([]);
         if (cutoff === '0018_') {
           expect(
             (await legacyPool.query('select body from task_comments')).rows,
@@ -311,6 +320,107 @@ database('PostgreSQL invariants', () => {
       }
     },
   );
+
+  it('rolls back and safely retries the acknowledgement migration', async () => {
+    const schema = `migration_retry_${crypto.randomUUID().replaceAll('-', '')}`;
+    await testPool.query(`create schema "${schema}"`);
+    const retryPool = new Pool({
+      connectionString: databaseUrl,
+      options: `-c search_path=${schema},public`,
+    });
+    try {
+      await runMigrations(retryPool);
+      await retryPool.query('drop table task_acknowledgements');
+      await retryPool.query(
+        `delete from _migrations
+         where name='0023_task_acknowledgements.sql'`,
+      );
+      await retryPool.query('create table migration_blocker(id integer)');
+      await retryPool.query(
+        `create index task_acknowledgements_task_recent_idx
+         on migration_blocker(id)`,
+      );
+
+      await expect(runMigrations(retryPool)).rejects.toThrow(
+        'task_acknowledgements_task_recent_idx',
+      );
+      expect(
+        (
+          await retryPool.query<{ exists: boolean }>(
+            `select exists(
+               select 1 from pg_tables
+               where schemaname=current_schema()
+                 and tablename='task_acknowledgements'
+             ) as exists`,
+          )
+        ).rows[0]?.exists,
+      ).toBe(false);
+      expect(
+        (
+          await retryPool.query(
+            `select 1 from _migrations
+             where name='0023_task_acknowledgements.sql'`,
+          )
+        ).rowCount,
+      ).toBe(0);
+
+      await retryPool.query('drop index task_acknowledgements_task_recent_idx');
+      await retryPool.query('drop table migration_blocker');
+      await runMigrations(retryPool);
+      await runMigrations(retryPool);
+      expect(
+        (
+          await retryPool.query<{ exists: boolean }>(
+            `select exists(
+               select 1 from pg_tables
+               where schemaname=current_schema()
+                 and tablename='task_acknowledgements'
+             ) as exists`,
+          )
+        ).rows[0]?.exists,
+      ).toBe(true);
+    } finally {
+      await retryPool.end();
+      await testPool.query(`drop schema if exists "${schema}" cascade`);
+    }
+  });
+
+  it('keeps one acknowledgement per person and removes them with the task', async () => {
+    const task = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,assignee_id,position)
+       values ($1,$2,$3,'Acknowledged task',$4,$5,1)`,
+      [task, boardB, columnB, userA, userB],
+    );
+    await client.query(
+      `insert into task_acknowledgements(task_id,user_id)
+       values ($1,$2),($1,$3)`,
+      [task, userA, userB],
+    );
+    await client.query(
+      `insert into task_acknowledgements(task_id,user_id)
+       values ($1,$2) on conflict do nothing`,
+      [task, userA],
+    );
+    expect(
+      (
+        await client.query(
+          `select user_id from task_acknowledgements
+           where task_id=$1 order by user_id`,
+          [task],
+        )
+      ).rows,
+    ).toEqual([userA, userB].sort().map((userId) => ({ user_id: userId })));
+    await client.query('delete from tasks where id=$1', [task]);
+    expect(
+      (
+        await client.query(
+          'select * from task_acknowledgements where task_id=$1',
+          [task],
+        )
+      ).rows,
+    ).toEqual([]);
+  });
 
   it('notifies task recipients, excludes own comments and preserves concurrent unread messages', async () => {
     const task = crypto.randomUUID();

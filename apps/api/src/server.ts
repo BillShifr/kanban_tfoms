@@ -33,6 +33,7 @@ import {
   taskLabels,
   taskEvents,
   taskComments,
+  taskAcknowledgements,
   tasks,
   timeEntries,
   timeEntryCorrections,
@@ -495,6 +496,73 @@ async function boardTasks(boardId: string, includeArchived = false) {
     labels: links.filter((l) => l.taskId === row.id),
     attachments: files.filter((file) => file.taskId === row.id),
   }));
+}
+type TaskAcknowledgementPerson = {
+  userId: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  acknowledgedAt: string;
+  hasAvatar: boolean;
+};
+type TaskAcknowledgementSummary = {
+  count: number;
+  acknowledgedByMe: boolean;
+  preview: TaskAcknowledgementPerson[];
+};
+async function acknowledgementSummaries(
+  taskIds: string[],
+  currentUserId: string,
+) {
+  if (!taskIds.length) return new Map<string, TaskAcknowledgementSummary>();
+  const result = await pool.query<{
+    taskId: string;
+    count: number;
+    acknowledgedByMe: boolean;
+    preview: TaskAcknowledgementPerson[];
+  }>(
+    `select totals.task_id as "taskId", totals.count,
+            totals.acknowledged_by_me as "acknowledgedByMe",
+            coalesce(preview.people, '[]'::json) as preview
+     from (
+       select task_id, count(*)::int as count,
+              bool_or(user_id=$2) as acknowledged_by_me
+       from task_acknowledgements
+       where task_id=any($1::uuid[])
+       group by task_id
+     ) totals
+     left join lateral (
+       select json_agg(json_build_object(
+         'userId', recent.user_id,
+         'email', recent.email,
+         'firstName', recent.first_name,
+         'lastName', recent.last_name,
+         'acknowledgedAt', recent.acknowledged_at,
+         'hasAvatar', recent.has_avatar
+       ) order by recent.acknowledged_at desc, recent.user_id) as people
+       from (
+         select a.user_id,u.email,u.first_name,u.last_name,a.acknowledged_at,
+                (u.archived_at is null and p.avatar is not null) as has_avatar
+         from task_acknowledgements a
+         join users u on u.id=a.user_id
+         left join user_profiles p on p.user_id=u.id
+         where a.task_id=totals.task_id
+         order by a.acknowledged_at desc,a.user_id
+         limit 3
+       ) recent
+     ) preview on true`,
+    [taskIds, currentUserId],
+  );
+  return new Map(
+    result.rows.map((row) => [
+      row.taskId,
+      {
+        count: row.count,
+        acknowledgedByMe: row.acknowledgedByMe,
+        preview: row.preview,
+      },
+    ]),
+  );
 }
 export async function buildApp() {
   const app = Fastify({
@@ -1243,9 +1311,18 @@ export async function buildApp() {
     const unreadCounts = new Map(
       unread.rows.map((row) => [row.task_id, row.count]),
     );
+    const acknowledgements = await acknowledgementSummaries(
+      rawTasks.map((task) => task.id),
+      u.id,
+    );
     const ts = rawTasks.map((task) => ({
       ...task,
       unreadComments: unreadCounts.get(task.id) ?? 0,
+      acknowledgements: acknowledgements.get(task.id) ?? {
+        count: 0,
+        acknowledgedByMe: false,
+        preview: [],
+      },
       labelIds: task.labels.map((label) => label.id),
       activeTimer: active.find((entry) => entry.taskId === task.id) ?? null,
     }));
@@ -1625,6 +1702,80 @@ export async function buildApp() {
       })),
     };
   });
+  app.get(
+    '/boards/:boardId/tasks/:taskId/acknowledgements',
+    async (r, reply) => {
+      const u = await user(r, reply),
+        b = id(r, 'boardId'),
+        t = id(r, 'taskId');
+      if (!u) return;
+      if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+        return;
+      const task = (
+        await db
+          .select({ id: tasks.id })
+          .from(tasks)
+          .where(and(eq(tasks.id, t.data), eq(tasks.boardId, b.data)))
+          .limit(1)
+      )[0];
+      if (!task) return reply.code(404).send({ code: 'TASK_NOT_FOUND' });
+      const acknowledgements = await pool.query<{
+        userId: string;
+        email: string;
+        firstName: string | null;
+        lastName: string | null;
+        acknowledgedAt: Date;
+        hasAvatar: boolean;
+      }>(
+        `select a.user_id as "userId",u.email,
+                u.first_name as "firstName",u.last_name as "lastName",
+                a.acknowledged_at as "acknowledgedAt",
+                (u.archived_at is null and p.avatar is not null) as "hasAvatar"
+         from task_acknowledgements a
+         join users u on u.id=a.user_id
+         left join user_profiles p on p.user_id=u.id
+         where a.task_id=$1
+         order by a.acknowledged_at desc,a.user_id`,
+        [t.data],
+      );
+      return { acknowledgements: acknowledgements.rows };
+    },
+  );
+  app.put(
+    '/boards/:boardId/tasks/:taskId/acknowledgement',
+    async (r, reply) => {
+      const u = await user(r, reply),
+        b = id(r, 'boardId'),
+        t = id(r, 'taskId'),
+        input = z
+          .object({ acknowledged: z.boolean() })
+          .strict()
+          .safeParse(r.body);
+      if (!u) return;
+      if (!b.success || !t.success || !(await boardOr404(b.data, u.id, reply)))
+        return;
+      if (!input.success)
+        return reply.code(400).send({ code: 'VALIDATION_ERROR' });
+      if (!(await activeTask(b.data, t.data)))
+        return reply.code(404).send({ code: 'TASK_NOT_FOUND' });
+      if (input.data.acknowledged) {
+        await db
+          .insert(taskAcknowledgements)
+          .values({ taskId: t.data, userId: u.id })
+          .onConflictDoNothing();
+      } else {
+        await db
+          .delete(taskAcknowledgements)
+          .where(
+            and(
+              eq(taskAcknowledgements.taskId, t.data),
+              eq(taskAcknowledgements.userId, u.id),
+            ),
+          );
+      }
+      return { acknowledged: input.data.acknowledged };
+    },
+  );
   app.post('/boards/:boardId/tasks/:taskId/comments/read', async (r, reply) => {
     const u = await user(r, reply),
       b = id(r, 'boardId'),

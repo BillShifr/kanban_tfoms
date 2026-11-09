@@ -25,6 +25,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   ActionIcon,
+  Avatar,
   Badge,
   Button,
   Checkbox,
@@ -178,6 +179,20 @@ type Task = {
   activeTimer?: { id: string; startedAt: string } | null;
   timeSeconds?: number;
   attachments?: Attachment[];
+  acknowledgements?: TaskAcknowledgementSummary;
+};
+type TaskAcknowledgement = {
+  userId: string;
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  acknowledgedAt: string;
+  hasAvatar: boolean;
+};
+type TaskAcknowledgementSummary = {
+  count: number;
+  acknowledgedByMe: boolean;
+  preview: TaskAcknowledgement[];
 };
 type Column = {
   id: string;
@@ -2056,14 +2071,230 @@ function useCollapsedPreference(key: string) {
   };
   return [value, update] as const;
 }
+function acknowledgementTime(value: string) {
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+function AcknowledgementAvatar({
+  acknowledgement,
+}: {
+  acknowledgement: TaskAcknowledgement;
+}) {
+  const label = personLabel(acknowledgement),
+    initials = [
+      acknowledgement.firstName?.slice(0, 1),
+      acknowledgement.lastName?.slice(0, 1),
+    ]
+      .filter(Boolean)
+      .join('')
+      .toLocaleUpperCase('ru-RU');
+  return (
+    <Avatar
+      size={24}
+      radius="xl"
+      src={
+        acknowledgement.hasAvatar
+          ? `/api/profile/avatar/${acknowledgement.userId}`
+          : undefined
+      }
+      title={label}
+      aria-label={label}
+    >
+      {initials || label.slice(0, 1).toLocaleUpperCase('ru-RU')}
+    </Avatar>
+  );
+}
+function TaskAcknowledgementControl({
+  boardId,
+  task,
+  refresh,
+  placement = 'card',
+}: {
+  boardId: string;
+  task: Task;
+  refresh: () => Promise<unknown>;
+  placement?: 'card' | 'modal';
+}) {
+  const queryClient = useQueryClient(),
+    [opened, setOpened] = useState(false),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(''),
+    summary = task.acknowledgements ?? {
+      count: 0,
+      acknowledgedByMe: false,
+      preview: [],
+    },
+    list = useQuery<{ acknowledgements: TaskAcknowledgement[] }>({
+      queryKey: ['task-acknowledgements', boardId, task.id],
+      queryFn: () =>
+        api(`/boards/${boardId}/tasks/${task.id}/acknowledgements`),
+      enabled: opened,
+    }),
+    toggle = async () => {
+      if (busy || task.archivedAt) return;
+      setBusy(true);
+      setError('');
+      try {
+        await api(`/boards/${boardId}/tasks/${task.id}/acknowledgement`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            acknowledged: !summary.acknowledgedByMe,
+          }),
+        });
+        await Promise.all([
+          refresh(),
+          queryClient.invalidateQueries({
+            queryKey: ['task-acknowledgements', boardId, task.id],
+          }),
+        ]);
+      } catch (caught) {
+        setError(err(caught));
+      } finally {
+        setBusy(false);
+      }
+    };
+  const firstPerson = summary.preview[0],
+    peopleLabel =
+      summary.count === 1 && firstPerson
+        ? personLabel(firstPerson)
+        : `Ознакомились: ${summary.count}`,
+    visiblePeopleLabel =
+      placement === 'modal' || summary.count === 1
+        ? peopleLabel
+        : String(summary.count);
+  return (
+    <div
+      className={`task-acknowledgements task-acknowledgements-${placement}`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <Tooltip
+        label={
+          task.archivedAt
+            ? 'Архивная задача'
+            : summary.acknowledgedByMe
+              ? 'Снять свою отметку «Ознакомился»'
+              : 'Отметить, что ознакомились'
+        }
+      >
+        <ActionIcon
+          className="task-acknowledgement-toggle"
+          variant="subtle"
+          color={summary.acknowledgedByMe ? 'teal' : 'gray'}
+          size="md"
+          loading={busy}
+          disabled={Boolean(task.archivedAt)}
+          aria-label={
+            summary.acknowledgedByMe
+              ? `Снять отметку ознакомления с задачи «${task.title}»`
+              : `Отметить задачу «${task.title}» как просмотренную`
+          }
+          aria-pressed={summary.acknowledgedByMe}
+          onClick={() => void toggle()}
+        >
+          <Eye size={17} />
+        </ActionIcon>
+      </Tooltip>
+      {summary.count > 0 ? (
+        <Popover
+          opened={opened}
+          onChange={setOpened}
+          position={placement === 'card' ? 'bottom-start' : 'bottom-end'}
+          width={300}
+          shadow="md"
+        >
+          <Popover.Target>
+            <button
+              type="button"
+              className="task-acknowledgement-people"
+              aria-label={`${peopleLabel}. Показать список`}
+              aria-expanded={opened}
+              onClick={() => setOpened((value) => !value)}
+            >
+              <span className="task-acknowledgement-avatars" aria-hidden="true">
+                {summary.preview.map((acknowledgement) => (
+                  <AcknowledgementAvatar
+                    key={acknowledgement.userId}
+                    acknowledgement={acknowledgement}
+                  />
+                ))}
+              </span>
+              <span className="task-acknowledgement-label">
+                {visiblePeopleLabel}
+              </span>
+            </button>
+          </Popover.Target>
+          <Popover.Dropdown>
+            <div className="acknowledgement-popover-heading">
+              <strong>Ознакомились</strong>
+              <span>{summary.count}</span>
+            </div>
+            {list.isLoading ? (
+              <Text size="sm" c="dimmed">
+                Загружаем список…
+              </Text>
+            ) : list.isError ? (
+              <div className="acknowledgement-list-state" role="alert">
+                <Text size="sm" c="red">
+                  Не удалось загрузить список.
+                </Text>
+                <Button
+                  variant="subtle"
+                  size="compact-sm"
+                  onClick={() => void list.refetch()}
+                >
+                  Повторить
+                </Button>
+              </div>
+            ) : (
+              <div className="acknowledgement-list" role="list">
+                {list.data?.acknowledgements.map((acknowledgement) => (
+                  <div
+                    className="acknowledgement-person"
+                    role="listitem"
+                    key={acknowledgement.userId}
+                  >
+                    <AcknowledgementAvatar acknowledgement={acknowledgement} />
+                    <span>
+                      <strong>{personLabel(acknowledgement)}</strong>
+                      <time dateTime={acknowledgement.acknowledgedAt}>
+                        {acknowledgementTime(acknowledgement.acknowledgedAt)}
+                      </time>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Popover.Dropdown>
+        </Popover>
+      ) : (
+        <span className="task-acknowledgement-empty">
+          Пока никто не отметил
+        </span>
+      )}
+      {error && (
+        <span className="task-acknowledgement-error" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
 function Card({
   task,
   data,
+  boardId,
   open,
+  refresh,
 }: {
   task: Task;
   data: Payload;
+  boardId: string;
   open: () => void;
+  refresh: () => Promise<unknown>;
 }) {
   const [collapsed, setCollapsed] = useCollapsedPreference(`task.${task.id}`);
   const [start, setStart] = useState<Date | null>(
@@ -2116,6 +2347,11 @@ function Card({
           </span>
         )}
       </button>
+      <TaskAcknowledgementControl
+        boardId={boardId}
+        task={task}
+        refresh={refresh}
+      />
       <ActionIcon
         className="card-collapse"
         variant="subtle"
@@ -2483,8 +2719,10 @@ function KanbanColumn({
             <Card
               task={task}
               data={data}
+              boardId={boardId}
               key={task.id}
               open={() => open(task)}
+              refresh={refresh}
             />
           ))}
         </SortableContext>
@@ -3104,6 +3342,12 @@ function TaskModal({
             </Tabs.Tab>
           </Tabs.List>
           <Group justify="flex-end" gap="xs" className="task-modal-toolbar">
+            <TaskAcknowledgementControl
+              boardId={data.board.id}
+              task={task}
+              refresh={refresh}
+              placement="modal"
+            />
             <Menu position="bottom-end" withinPortal={false}>
               <Menu.Target>
                 <ActionIcon

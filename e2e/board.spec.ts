@@ -1,4 +1,10 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import {
+  expect,
+  test,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from '@playwright/test';
 
 const email = process.env.E2E_EMAIL ?? 'admin@example.com';
 const password = process.env.E2E_PASSWORD ?? 'change-me-now';
@@ -1871,6 +1877,157 @@ test.describe('core board workflow', () => {
       );
     } finally {
       await context.close();
+    }
+  });
+
+  test('lets board participants acknowledge a task without changing its status', async ({
+    page,
+    browser,
+  }) => {
+    await signIn(page);
+    const participants = await Promise.all(
+      ['Анна', 'Борис', 'Вера', 'Глеб'].map((firstName, index) =>
+        createAccount(
+          page,
+          uniqueEmail(`acknowledgement-${index}`),
+          'acknowledge-pass-123',
+          'admin',
+          { firstName, lastName: 'Проверяющий' },
+        ),
+      ),
+    );
+    const outsider = await createAccount(
+      page,
+      uniqueEmail('acknowledgement-outsider'),
+      'acknowledge-pass-123',
+      'user',
+      { firstName: 'Внешний', lastName: 'Наблюдатель' },
+    );
+    const department = await createDepartmentForTest(page);
+    const board = await createBoardApi(page, department.id);
+    const payload = await (
+      await page.request.get(`/api/boards/${board.id}`)
+    ).json();
+    const title = uniqueName('Подтвердить ознакомление');
+    const { task } = await (
+      await page.request.post(`/api/boards/${board.id}/tasks`, {
+        data: {
+          title,
+          columnId: payload.columns[0].id,
+          assigneeId: participants[0]!.id,
+        },
+      })
+    ).json();
+    await page.reload();
+    await selectBoard(page, board.name, department.name);
+    const card = taskCard(page, title);
+    const acknowledgement = card.getByRole('button', {
+      name: `Отметить задачу «${title}» как просмотренную`,
+    });
+    await expect(acknowledgement).toHaveAttribute('aria-pressed', 'false');
+    await expect(card).toContainText('Пока никто не отметил');
+    await acknowledgement.click();
+    await expect(card.getByRole('dialog')).toHaveCount(0);
+    await expect(
+      card.getByRole('button', {
+        name: `Снять отметку ознакомления с задачи «${title}»`,
+      }),
+    ).toHaveAttribute('aria-pressed', 'true');
+
+    const origin = new URL(page.url()).origin;
+    const participantContexts: BrowserContext[] = [];
+    try {
+      for (const participant of participants) {
+        const context = await browser.newContext();
+        participantContexts.push(context);
+        await context.request.post(`${origin}/api/auth/sign-in`, {
+          data: {
+            email: participant.email,
+            password: 'acknowledge-pass-123',
+          },
+        });
+        const response = await context.request.put(
+          `${origin}/api/boards/${board.id}/tasks/${task.id}/acknowledgement`,
+          { data: { acknowledged: true } },
+        );
+        expect(response.status()).toBe(200);
+      }
+      const outsiderContext = await browser.newContext();
+      participantContexts.push(outsiderContext);
+      await outsiderContext.request.post(`${origin}/api/auth/sign-in`, {
+        data: {
+          email: outsider.email,
+          password: 'acknowledge-pass-123',
+        },
+      });
+      const forbidden = await outsiderContext.request.put(
+        `${origin}/api/boards/${board.id}/tasks/${task.id}/acknowledgement`,
+        { data: { acknowledged: true } },
+      );
+      expect(forbidden.status()).toBe(404);
+
+      await page.reload();
+      await selectBoard(page, board.name, department.name);
+      const updatedCard = taskCard(page, title);
+      const people = updatedCard.getByRole('button', {
+        name: 'Ознакомились: 5. Показать список',
+      });
+      await expect(people).toBeVisible();
+      await expect(
+        updatedCard
+          .locator('.task-acknowledgement-avatars')
+          .locator('.mantine-Avatar-root'),
+      ).toHaveCount(3);
+      await expect(people.locator('.task-acknowledgement-label')).toHaveText(
+        '5',
+      );
+      await people.click();
+      const list = page.locator('.acknowledgement-list');
+      await expect(list).toBeVisible();
+      for (const participant of participants)
+        await expect(list).toContainText(
+          `${participant.lastName} ${participant.firstName}`,
+        );
+
+      await updatedCard
+        .getByRole('button', {
+          name: `Снять отметку ознакомления с задачи «${title}»`,
+        })
+        .click();
+      await expect(
+        updatedCard.getByRole('button', {
+          name: `Отметить задачу «${title}» как просмотренную`,
+        }),
+      ).toHaveAttribute('aria-pressed', 'false');
+      await expect(
+        updatedCard.getByRole('button', {
+          name: 'Ознакомились: 4. Показать список',
+        }),
+      ).toBeVisible();
+      const boardAfterRemoval = await (
+        await page.request.get(`/api/boards/${board.id}`)
+      ).json();
+      const taskAfterRemoval = boardAfterRemoval.columns
+        .flatMap(
+          (column: {
+            tasks: Array<{
+              id: string;
+              columnId: string;
+              acknowledgements: {
+                count: number;
+                acknowledgedByMe: boolean;
+              };
+            }>;
+          }) => column.tasks,
+        )
+        .find((item: { id: string }) => item.id === task.id);
+      expect(taskAfterRemoval.columnId).toBe(payload.columns[0].id);
+      expect(taskAfterRemoval.acknowledgements).toMatchObject({
+        count: 4,
+        acknowledgedByMe: false,
+      });
+    } finally {
+      await Promise.all(participantContexts.map((context) => context.close()));
     }
   });
 
