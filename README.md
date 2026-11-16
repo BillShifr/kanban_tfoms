@@ -107,6 +107,12 @@ docker compose up -d --build
 Миграция `0023_task_acknowledgements.sql` не помечает старые задачи задним
 числом.
 
+В списке досок показывается число новых задач: это неархивные задачи,
+созданные после последнего просмотра доски другими участниками.
+Открытие доски сбрасывает счётчик. Миграция `0024_board_visits.sql`
+фиксирует текущие доски как уже просмотренные и не уведомляет о старых
+задачах.
+
 При проектировании использованы
 [профили GitHub](https://docs.github.com/en/account-and-profile/concepts/personal-profile)
 и [достижения GitLab](https://docs.gitlab.com/user/profile/achievements/):

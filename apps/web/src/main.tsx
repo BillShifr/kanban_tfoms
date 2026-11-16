@@ -137,6 +137,7 @@ type Board = {
   name: string;
   departmentId?: string | null;
   archivedAt?: string | null;
+  newTaskCount?: number;
 };
 type Department = { id: string; name: string; canManage?: boolean };
 type Person = {
@@ -5140,6 +5141,14 @@ function SidebarContent({
                           >
                             <Columns3 size={15} aria-hidden="true" />
                             <span>{board.name}</span>
+                            {!!board.newTaskCount && (
+                              <span
+                                className="board-new-tasks"
+                                aria-label={`Новые задачи: ${board.newTaskCount}`}
+                              >
+                                {board.newTaskCount}
+                              </span>
+                            )}
                           </button>
                         </li>
                       ))}
@@ -5181,6 +5190,7 @@ function Workspace({
     boards = useQuery<{ boards: Board[] }>({
       queryKey: ['boards'],
       queryFn: () => api('/boards'),
+      refetchInterval: 15000,
     }),
     departments = useQuery<{ departments: Department[] }>({
       queryKey: ['departments'],
@@ -5338,6 +5348,10 @@ function Workspace({
     enabled: !!selected,
     refetchInterval: 15000,
   });
+  useEffect(() => {
+    if (!selected?.id || !board.isSuccess || board.isFetching) return;
+    void q.invalidateQueries({ queryKey: ['boards'] });
+  }, [board.dataUpdatedAt, board.isFetching, board.isSuccess, q, selected?.id]);
   const refresh = async () => {
     await q.invalidateQueries({ queryKey: ['board', selected?.id] });
     await board.refetch();

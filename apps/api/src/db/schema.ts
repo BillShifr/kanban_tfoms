@@ -366,6 +366,24 @@ export const taskCommentUnread = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.commentId] })],
 );
+export const boardVisits = pgTable(
+  'board_visits',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    boardId: uuid('board_id')
+      .notNull()
+      .references(() => boards.id, { onDelete: 'cascade' }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.boardId] }),
+    index('board_visits_board_user_idx').on(t.boardId, t.userId),
+  ],
+);
 export const taskAcknowledgements = pgTable(
   'task_acknowledgements',
   {
