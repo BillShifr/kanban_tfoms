@@ -1158,17 +1158,40 @@ export async function buildApp() {
     if (!u) return;
     const includeArchived =
       (r.query as Record<string, string | undefined>).archived === 'true';
+    const elevated = isElevated(u.role);
+    await pool.query(
+      `insert into board_visits(user_id, board_id, last_seen_at)
+       select $1, b.id, now()
+       from boards b
+       where ($2::boolean = (b.archived_at is not null))
+         and ($3::boolean
+           or exists (select 1 from board_members bm where bm.board_id=b.id and bm.user_id=$1)
+           or exists (select 1 from department_members dm where dm.department_id=b.department_id and dm.user_id=$1))
+         and not exists (
+           select 1 from board_visits v where v.user_id=$1 and v.board_id=b.id
+         )`,
+      [u.id, includeArchived, elevated],
+    );
     return {
       boards: (
         await pool.query(
-          `select b.id,b.name,b.department_id as "departmentId",b.created_at as "createdAt",b.archived_at as "archivedAt"
+          `select b.id,b.name,b.department_id as "departmentId",b.created_at as "createdAt",b.archived_at as "archivedAt",
+                  coalesce((
+                    select count(*)::int
+                    from tasks t
+                    join board_visits v on v.board_id=t.board_id and v.user_id=$1
+                    where t.board_id=b.id
+                      and t.archived_at is null
+                      and t.author_id is distinct from $1
+                      and t.created_at > v.last_seen_at
+                  ), 0) as "newTaskCount"
          from boards b
          where ($2::boolean = (b.archived_at is not null))
            and ( $3::boolean
              or exists (select 1 from board_members bm where bm.board_id=b.id and bm.user_id=$1)
              or exists (select 1 from department_members dm where dm.department_id=b.department_id and dm.user_id=$1))
          order by b.created_at`,
-          [u.id, includeArchived, isElevated(u.role)],
+          [u.id, includeArchived, elevated],
         )
       ).rows,
     };
@@ -1238,6 +1261,13 @@ export async function buildApp() {
       (r.query as Record<string, string | undefined>).archived === 'true';
     if (!p.success || !(await boardOr404(p.data, u.id, reply, includeArchived)))
       return;
+    await pool.query(
+      `insert into board_visits(user_id, board_id, last_seen_at)
+       values ($1, $2, now())
+       on conflict (user_id, board_id)
+       do update set last_seen_at = excluded.last_seen_at`,
+      [u.id, p.data],
+    );
     const board = (
       await db
         .select({

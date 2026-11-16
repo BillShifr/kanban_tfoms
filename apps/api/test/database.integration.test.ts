@@ -422,6 +422,68 @@ database('PostgreSQL invariants', () => {
     ).toEqual([]);
   });
 
+  it('counts new tasks after the board was last seen and ignores self-authored tasks', async () => {
+    await client.query(
+      `insert into board_visits(user_id, board_id, last_seen_at)
+       values ($1,$2, now() - interval '1 hour')
+       on conflict (user_id, board_id) do update set last_seen_at = excluded.last_seen_at`,
+      [userB, boardB],
+    );
+    const recent = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,position)
+       values ($1,$2,$3,'Fresh task',$4,2)`,
+      [recent, boardB, columnB, userA],
+    );
+    const observed = await client.query<{ count: number }>(
+      `select count(*)::int as count
+       from tasks t
+       join board_visits v on v.board_id=t.board_id and v.user_id=$1
+       where t.board_id=$2
+         and t.archived_at is null
+         and t.author_id is distinct from $1
+         and t.created_at > v.last_seen_at`,
+      [userB, boardB],
+    );
+    expect(observed.rows[0]?.count).toBe(1);
+
+    const authored = crypto.randomUUID();
+    await client.query(
+      `insert into tasks(id,board_id,column_id,title,author_id,position)
+       values ($1,$2,$3,'Mine',$4,3)`,
+      [authored, boardB, columnB, userB],
+    );
+    const afterOwn = await client.query<{ count: number }>(
+      `select count(*)::int as count
+       from tasks t
+       join board_visits v on v.board_id=t.board_id and v.user_id=$1
+       where t.board_id=$2
+         and t.archived_at is null
+         and t.author_id is distinct from $1
+         and t.created_at > v.last_seen_at`,
+      [userB, boardB],
+    );
+    expect(afterOwn.rows[0]?.count).toBe(1);
+
+    await client.query(
+      `insert into board_visits(user_id, board_id, last_seen_at)
+       values ($1,$2, now())
+       on conflict (user_id, board_id) do update set last_seen_at = excluded.last_seen_at`,
+      [userB, boardB],
+    );
+    const cleared = await client.query<{ count: number }>(
+      `select count(*)::int as count
+       from tasks t
+       join board_visits v on v.board_id=t.board_id and v.user_id=$1
+       where t.board_id=$2
+         and t.archived_at is null
+         and t.author_id is distinct from $1
+         and t.created_at > v.last_seen_at`,
+      [userB, boardB],
+    );
+    expect(cleared.rows[0]?.count).toBe(0);
+  });
+
   it('notifies task recipients, excludes own comments and preserves concurrent unread messages', async () => {
     const task = crypto.randomUUID();
     const first = crypto.randomUUID();
