@@ -9,7 +9,7 @@ FROM dependencies AS build
 COPY . .
 RUN npm run build -w @kanban/web
 
-FROM docker.io/nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS runtime
+FROM docker.io/nginx/nginx-unprivileged:1.30.7-alpine@sha256:d7fb82dacc08ff860fc5b05d5608a751b301af9bbe2396350e4fe90ea509b915 AS runtime
 COPY --chown=nginx:nginx apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --chown=nginx:nginx --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 8080
