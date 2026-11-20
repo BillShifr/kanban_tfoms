@@ -18,6 +18,11 @@ const dockerfiles = [
   new URL('../../web/Dockerfile', import.meta.url),
 ];
 const apiDockerfile = readFileSync(dockerfiles[0]!, 'utf8');
+const webDockerfile = readFileSync(dockerfiles[1]!, 'utf8');
+const webNginxConf = readFileSync(
+  new URL('../../web/nginx.conf', import.meta.url),
+  'utf8',
+);
 const productionCompose = readFileSync(
   new URL('../../../compose.prod.yml', import.meta.url),
   'utf8',
@@ -76,9 +81,20 @@ describe('container deployment configuration', () => {
         const [, image, , stage] = line.split(/\s+/);
         if (stages.has(image!)) continue;
         expect(image).toMatch(/^[a-z0-9.-]+\.[a-z]+\//);
+        expect(image).toMatch(/@sha256:[a-f0-9]{64}$/);
         if (stage) stages.add(stage);
       }
     }
+  });
+
+  it('pins the patched unprivileged nginx 1.30.7 runtime without HTTP/2', () => {
+    expect(webDockerfile).toContain(
+      'FROM docker.io/nginx/nginx-unprivileged:1.30.7-alpine@sha256:d7fb82dacc08ff860fc5b05d5608a751b301af9bbe2396350e4fe90ea509b915 AS runtime',
+    );
+    expect(webDockerfile).not.toContain('nginxinc/nginx-unprivileged');
+    expect(webNginxConf).toMatch(/^\s*listen 8080;/m);
+    expect(webNginxConf).not.toMatch(/\bhttp2\b/i);
+    expect(webNginxConf).not.toMatch(/listen\s+80\b/);
   });
 
   it('uses a shell-free Compose healthcheck that works with OCI images', () => {
