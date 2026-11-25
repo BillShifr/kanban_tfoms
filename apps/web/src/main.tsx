@@ -715,10 +715,39 @@ function AssigneeCombobox({
     </Combobox>
   );
 }
-function Login({ done }: { done: (u: User) => void }) {
-  const [email, setEmail] = useState('admin@example.com'),
-    [password, setPassword] = useState('change-me-now'),
-    [error, setError] = useState('');
+const LOGIN_EMAIL_KEY = 'kanban.login.email';
+
+function readStoredLoginEmail() {
+  try {
+    return sessionStorage.getItem(LOGIN_EMAIL_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function storeLoginEmail(value: string) {
+  try {
+    if (value) sessionStorage.setItem(LOGIN_EMAIL_KEY, value);
+    else sessionStorage.removeItem(LOGIN_EMAIL_KEY);
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+function Login({
+  done,
+  email,
+  password,
+  onEmailChange,
+  onPasswordChange,
+}: {
+  done: (u: User) => void;
+  email: string;
+  password: string;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+}) {
+  const [error, setError] = useState('');
   return (
     <main className="auth">
       <form
@@ -754,14 +783,14 @@ function Login({ done }: { done: (u: User) => void }) {
         <TextInput
           label="Email"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => onEmailChange(e.target.value)}
           type="email"
           required
         />
         <PasswordInput
           label="Пароль"
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={(e) => onPasswordChange(e.target.value)}
           required
         />
         {error && <p role="alert">{error}</p>}
@@ -5932,6 +5961,8 @@ function Workspace({
 }
 function App() {
   const [u, setU] = useState<User | null>(null),
+    [email, setEmail] = useState(readStoredLoginEmail),
+    [password, setPassword] = useState(''),
     me = useQuery<{ user: User }>({
       queryKey: ['me'],
       queryFn: () => api('/auth/me'),
@@ -5947,11 +5978,24 @@ function App() {
       updateCurrentUser={setU}
       logout={async () => {
         await api('/auth/sign-out', { method: 'POST' });
+        setPassword('');
         setU(null);
       }}
     />
   ) : (
-    <Login done={setU} />
+    <Login
+      email={email}
+      password={password}
+      onEmailChange={(value) => {
+        setEmail(value);
+        storeLoginEmail(value);
+      }}
+      onPasswordChange={setPassword}
+      done={(user) => {
+        setPassword('');
+        setU(user);
+      }}
+    />
   );
 }
 createRoot(document.getElementById('root')!).render(
