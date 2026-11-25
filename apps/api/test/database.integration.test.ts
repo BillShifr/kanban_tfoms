@@ -1,3 +1,4 @@
+import './set-database-url.js';
 import crypto from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,9 @@ import {
 } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
 import { pool as modulePool } from '../src/db/client.js';
+import { hashToken } from '../src/domain.js';
 import { migrationChecksum, runMigrations } from '../src/migrate.js';
+import { buildApp } from '../src/server.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const database = describe.skipIf(!databaseUrl);
@@ -948,5 +951,73 @@ database('PostgreSQL invariants', () => {
       assignee_id: null,
       assignee_name: 'External person',
     });
+  });
+
+  it('accepts a Russian department name and rejects a case-insensitive duplicate', async () => {
+    const name = 'Отдел организации и проведения';
+    const firstId = crypto.randomUUID();
+    await client.query(`insert into departments(id,name) values ($1,$2)`, [
+      firstId,
+      name,
+    ]);
+    expect(
+      (
+        await client.query<{ name: string }>(
+          'select name from departments where id=$1',
+          [firstId],
+        )
+      ).rows[0]?.name,
+    ).toBe(name);
+
+    await expect(
+      client.query(`insert into departments(id,name) values ($1,$2)`, [
+        crypto.randomUUID(),
+        name,
+      ]),
+    ).rejects.toMatchObject({ code: '23505' });
+  });
+
+  it('creates a department with a Russian name and returns 409 on a name conflict', async () => {
+    const name = 'Отдел организации и проведения';
+    const userId = crypto.randomUUID();
+    const token = crypto.randomBytes(32).toString('base64url');
+    await testPool.query('delete from departments where name=$1', [name]);
+    await testPool.query(
+      `insert into users(id,email,password_hash,role)
+       values ($1,$2,'hash','superadmin')`,
+      [userId, `${userId}@example.test`],
+    );
+    await testPool.query(
+      `insert into sessions(id,user_id,token_hash,expires_at)
+       values ($1,$2,$3,now() + interval '1 hour')`,
+      [crypto.randomUUID(), userId, hashToken(token)],
+    );
+    const app = await buildApp();
+    try {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/departments',
+        cookies: { kanban_session: token },
+        payload: { name },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({
+        department: { name, canManage: true },
+      });
+
+      const duplicate = await app.inject({
+        method: 'POST',
+        url: '/departments',
+        cookies: { kanban_session: token },
+        payload: { name },
+      });
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.json()).toEqual({ code: 'DEPARTMENT_NAME_TAKEN' });
+    } finally {
+      await app.close();
+      await testPool.query('delete from departments where name=$1', [name]);
+      await testPool.query('delete from sessions where user_id=$1', [userId]);
+      await testPool.query('delete from users where id=$1', [userId]);
+    }
   });
 });
