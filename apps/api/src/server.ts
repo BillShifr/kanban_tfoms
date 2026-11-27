@@ -54,6 +54,7 @@ import {
   type AccountRole,
 } from './policy.js';
 import { assertBootstrapCredentials, loadRuntimeConfig } from './config.js';
+import { departmentInput, departmentWriteError } from './department-name.js';
 import { rewardsFor } from './rewards.js';
 const runtime = loadRuntimeConfig();
 const cookieName = 'kanban_session',
@@ -937,7 +938,7 @@ export async function buildApp() {
   });
   app.post('/departments', async (r, reply) => {
     const u = await user(r, reply),
-      p = boardInput.safeParse(r.body);
+      p = departmentInput.safeParse(r.body);
     if (!u) return;
     if (!p.success) return reply.code(400).send({ code: 'VALIDATION_ERROR' });
     const department = {
@@ -956,13 +957,8 @@ export async function buildApp() {
             .values({ departmentId: department.id, userId: u.id });
       });
     } catch (error) {
-      if (
-        typeof error === 'object' &&
-        error &&
-        'code' in error &&
-        error.code === '23505'
-      )
-        return reply.code(409).send({ code: 'DEPARTMENT_NAME_TAKEN' });
+      const mapped = departmentWriteError(error);
+      if (mapped) return reply.code(mapped.status).send({ code: mapped.code });
       throw error;
     }
     return reply.code(201).send({ department });
@@ -970,7 +966,7 @@ export async function buildApp() {
   app.patch('/departments/:departmentId', async (r, reply) => {
     const u = await user(r, reply),
       d = id(r, 'departmentId'),
-      p = boardInput.safeParse(r.body);
+      p = departmentInput.safeParse(r.body);
     if (!u) return;
     if (!d.success)
       return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
@@ -986,13 +982,8 @@ export async function buildApp() {
       if (!updated[0])
         return reply.code(404).send({ code: 'DEPARTMENT_NOT_FOUND' });
     } catch (error) {
-      if (
-        typeof error === 'object' &&
-        error &&
-        'code' in error &&
-        error.code === '23505'
-      )
-        return reply.code(409).send({ code: 'DEPARTMENT_NAME_TAKEN' });
+      const mapped = departmentWriteError(error);
+      if (mapped) return reply.code(mapped.status).send({ code: mapped.code });
       throw error;
     }
     return reply.code(204).send();
